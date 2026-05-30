@@ -118,6 +118,9 @@ itself (distinct from the global `overview`, which describes the agent).
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
+    # Console-script name (pyproject [project.scripts]); the rubric derives the
+    # tool name from it, so `explain jlab` must resolve.
+    ("jlab",): _ROOT,
     ("jetson-ai-lab-cli",): _ROOT,
     ("whoami",): _WHOAMI,
     ("learn",): _LEARN,

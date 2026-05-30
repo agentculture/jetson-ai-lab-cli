@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-30
+
+### Changed
+
+- Expanded the seed CLAUDE.md placeholder into a full runtime prompt — CLI architecture, the four agent-first contracts (dispatch/error/output/explain), the rubric constraints, build/test/lint commands, conventions, and the CI/publish + version-bump-per-PR workflow.
+
+### Fixed
+
+- `explain jlab` now resolves — added the console-script name (`jlab`) as an explain-catalog self-key so `teken cli doctor . --strict` (the CI rubric gate) passes; it derives the tool name from `[project.scripts]`, not the `jetson-ai-lab-cli` display name.
+
 ## [0.1.1] - 2026-05-26
 
 ### Changed
