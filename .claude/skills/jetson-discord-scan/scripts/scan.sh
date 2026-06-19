@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 #
 # jetson-discord-scan — read-only shallow scan of the Jetson AI Lab Discord.
 #
@@ -12,7 +13,7 @@
 #   doctor                      Preflight: token present + guild readable.
 #   channels [--all]            List PUBLIC channels as JSON, each with a "public"
 #                               flag (--all also includes private/role-gated ones).
-#   read <channel_id> [limit]   Last N messages of one channel (1-100, default 20).
+#   read <channel_id> [--limit N]  Last N messages of one channel (1-100, default 20).
 #   active [flags]              THE shallow scan — probe all PUBLIC text channels
 #                               (private channels are ignored), keep those
 #                               posted-to within --since days, rank by in-window
@@ -31,7 +32,6 @@
 #   DISCORD_BOT_CLI            full command to invoke the CLI (overrides resolution).
 #   DISCORD_BOT_CLI_PROJECT    checkout whose .venv has the [discord] extra
 #                              (default: ~/git/discord-bot-cli).
-set -euo pipefail
 
 GUILD_ID="${JLAB_GUILD_ID:-1326246312072581160}"   # Jetson AI Lab Research Group
 DBC_PROJECT="${DISCORD_BOT_CLI_PROJECT:-$HOME/git/discord-bot-cli}"
@@ -74,15 +74,17 @@ shift || true
 
 case "$cmd" in
 help | -h | --help)
-  sed -n '4,33p' "$0" | sed 's/^# \{0,1\}//'
+  # Print the leading doc comment (skip shebang + set), stop at first code line.
+  awk 'NR<=2 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"
   ;;
 
 doctor)
   require_token
-  if "${DBC[@]}" channel list "$GUILD_ID" --json >/dev/null 2>/tmp/jds_doctor.err; then
+  # Capture stderr into a variable (no fixed /tmp file — race/symlink-safe).
+  if err="$("${DBC[@]}" channel list "$GUILD_ID" --json 2>&1 >/dev/null)"; then
     printf '{"ok": true, "guild_id": "%s", "invocation": "%s"}\n' "$GUILD_ID" "${DBC[*]}"
   else
-    die "cannot read guild $GUILD_ID" "$(tr -d '\n' </tmp/jds_doctor.err)" 2
+    die "cannot read guild $GUILD_ID" "$(printf '%s' "$err" | tr -d '\n')" 2
   fi
   ;;
 
@@ -101,8 +103,13 @@ channels)
 
 read)
   require_token
-  [ -n "${1:-}" ] || die "usage: scan.sh read <channel_id> [limit]" "" 1
-  "${DBC[@]}" channel messages "$1" --limit "${2:-20}" --json
+  [ -n "${1:-}" ] || die "usage: scan.sh read <channel_id> [--limit N]" "" 1
+  ch="$1"
+  shift
+  # Forward any extra flags (e.g. --limit 50) straight to the read verb; the
+  # tool defaults to --limit 20 when none is given. This matches the documented
+  # `read <channel_id> --limit N` form.
+  "${DBC[@]}" channel messages "$ch" "$@" --json
   ;;
 
 # Internal: fetch one channel's messages into <outdir>/<id>.json. Used by the
@@ -124,20 +131,27 @@ active)
   PAR=6
   while [ $# -gt 0 ]; do
     case "$1" in
-    --since) SINCE="$2"; shift 2 ;;
-    --limit) LIMIT="$2"; shift 2 ;;
-    --top) TOP="$2"; shift 2 ;;
-    --preview) PREVIEW="$2"; shift 2 ;;
-    --par) PAR="$2"; shift 2 ;;
+    --since | --limit | --top | --preview | --par)
+      [ $# -ge 2 ] || die "flag $1 needs a value" "see: scan.sh help" 1
+      case "$1" in
+      --since) SINCE="$2" ;;
+      --limit) LIMIT="$2" ;;
+      --top) TOP="$2" ;;
+      --preview) PREVIEW="$2" ;;
+      --par) PAR="$2" ;;
+      esac
+      shift 2
+      ;;
     *) die "unknown flag: $1" "see: scan.sh help" 1 ;;
     esac
   done
 
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  # Public channels only — private/role-gated channels are never probed.
-  "${DBC_PY[@]}" "$HERE/channels.py" --public-only >"$tmp/_channels.json" 2>/tmp/jds_active.err ||
-    die "cannot read guild $GUILD_ID" "$(tr -d '\n' </tmp/jds_active.err)" 2
+  # Public channels only — private/role-gated channels are never probed. The
+  # stderr capture stays inside the per-run mktemp dir (no fixed /tmp path).
+  "${DBC_PY[@]}" "$HERE/channels.py" --public-only >"$tmp/_channels.json" 2>"$tmp/_err" ||
+    die "cannot read guild $GUILD_ID" "$(tr -d '\n' <"$tmp/_err")" 2
 
   # Public text channels only — categories/voice/forum carry no plain messages.
   python3 -c '

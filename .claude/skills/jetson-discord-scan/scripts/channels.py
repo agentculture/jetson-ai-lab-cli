@@ -74,7 +74,10 @@ def main() -> int:
     args = ap.parse_args()
 
     try:
-        channels = _list(int(args.guild_id))
+        # parse_id turns a non-numeric id into a structured CliError (exit 1)
+        # instead of an uncaught ValueError traceback — honoring the error contract.
+        guild_id = discord_client.parse_id(args.guild_id, "guild-id")
+        channels = _list(guild_id)
     except CliError as err:
         json.dump(err.to_dict(), sys.stderr, ensure_ascii=False)
         sys.stderr.write("\n")

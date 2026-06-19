@@ -1,7 +1,7 @@
 ---
 name: jetson-discord-scan
 type: command
-description: Read-only shallow scan of the Jetson AI Lab Discord — list PUBLIC channels, read a channel's recent messages, or find which public channels are active/high-traffic in the last month. Use when the user says "scan the Jetson AI Lab Discord", "what's active on Discord", "which channels are busy", "read #<channel>", or wants to index Jetson AI Lab community discussion. Private channels are always ignored.
+description: Read-only shallow scan of the Jetson AI Lab Discord — list PUBLIC channels, read a channel's recent messages, or find which public channels are active/high-traffic in the last month. Use when the user says "scan the Jetson AI Lab Discord", "what's active on Discord", "which channels are busy", "read #<channel>", or wants to read/collect Jetson AI Lab community discussion. It only reads — it does not index or answer. Private channels are always ignored.
 ---
 
 # Jetson AI Lab Discord scan
@@ -9,8 +9,9 @@ description: Read-only shallow scan of the Jetson AI Lab Discord — list PUBLIC
 Read-only reconnaissance of the **Jetson AI Lab Research Group** Discord
 (guild `1326246312072581160`). It wraps the sibling
 [`discord-bot-cli`](https://github.com/agentculture/discord-bot-cli) **read
-verbs only** — it never posts, reacts, or creates threads. This is the first
-piece of the agent's intended job: fetch and index Jetson AI Lab discussion.
+verbs only** — it never posts, reacts, or creates threads. This is the
+**read/fetch** side of the agent's intended job; the indexing and
+question-answering parts are **not built yet** — this skill only reads.
 
 **Public channels only.** The bot token is read-scoped, and this skill filters
 to channels the guild's `@everyone` role can view. Private / role-gated channels
