@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-19
+
+### Added
+
+- Vendored ask-colleague skill — drive the sibling colleague CLI to hand a scoped repo task to a *different* backend/model for a diverse second opinion or handoff: read-only explore/review (isolated in a throwaway git worktree), write [--apply|--pr], feedback (ROI grade loop), clean (reap crashed colleague/* branches), and the pilot verbs monitor/guide/stop over colleague flight. Cite-don't-import (origin: colleague, re-broadcast via guildmaster).
+
+### Changed
+
+- docs/skill-sources.md now documents ask-colleague provenance (origin colleague, re-broadcast via guildmaster), the cite-don't-import re-sync rule, and the known upstream nits filed at sync time (CLI-contract → colleague; shellcheck → guildmaster) rather than patched locally.
+
 ## [0.2.0] - 2026-06-19
 
 ### Added
