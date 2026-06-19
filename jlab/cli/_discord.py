@@ -58,10 +58,10 @@ def _as_cli_error(exc: Exception, *, code: int, message: str, remediation: str) 
     if isinstance(exc, CliError):
         return exc
     try:
-        from discord_bot_cli.cli._errors import CliError as _DBCliError  # noqa: F811
+        from discord_bot_cli.cli._errors import CliError as db_clierror  # noqa: F811
     except ImportError:
-        _DBCliError = ()  # type: ignore[assignment]
-    if _DBCliError and isinstance(exc, _DBCliError):
+        db_clierror = ()  # type: ignore[assignment]
+    if db_clierror and isinstance(exc, db_clierror):
         return CliError(code=exc.code, message=exc.message, remediation=exc.remediation)
     return CliError(code=code, message=message, remediation=remediation)
 
@@ -76,7 +76,7 @@ def _run(action: Any) -> Any:
     dc = _seam()
     try:
         return dc.run(action)
-    except Exception as exc:  # noqa: BLE001 - translate to the jlab error contract
+    except Exception as exc:  # noqa: BLE001
         raise _as_cli_error(
             exc,
             code=2,
@@ -103,7 +103,7 @@ def _channel_public(channel: Any, everyone: Any) -> bool | None:
     """Whether ``@everyone`` can view *channel* (``None`` if perms are unknown)."""
     try:
         return bool(channel.permissions_for(everyone).view_channel)
-    except Exception:  # noqa: BLE001 - unknown perms => report, don't crash
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -196,7 +196,7 @@ async def _probe_channel(channel: Any, fetch_limit: int) -> dict:
     try:
         msgs = [m async for m in channel.history(limit=fetch_limit)]
         msgs.reverse()
-    except Exception:  # noqa: BLE001 - one bad channel must not abort the scan
+    except Exception:  # noqa: BLE001
         msgs = []
     return {
         "id": str(channel.id),
