@@ -8,17 +8,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 agent for the Jetson AI Lab community. It is meant to fetch and index Jetson AI
 Lab docs/sources and answer members' questions on Discord.
 
-**Current state:** none of that domain functionality exists yet. This repo is the
-unmodified **AgentCulture "culture-agent-template" scaffold** (see `git log`:
-*"scaffold jetson-ai-lab-cli from culture-agent-template"*). What's actually here
-today is a generic, dependency-free **agent-first CLI** plus the mesh-agent
-plumbing (identity, skill kit, CI/deploy baseline). Building the Discord/Jetson
-functionality means *adding* verbs/nouns to this CLI (or new subsystems) on top
-of the scaffold — the patterns below are how you do that.
+**Current state:** mostly still the scaffold, with the **first slice of domain
+functionality now real**. The repo began as the unmodified **AgentCulture
+"culture-agent-template" scaffold** (see `git log`: *"scaffold jetson-ai-lab-cli
+from culture-agent-template"*) — a generic, dependency-free **agent-first CLI**
+plus mesh-agent plumbing (identity, skill kit, CI/deploy baseline). On top of
+that, the **`jetson-discord-scan` skill** now gives the agent a real, read-only
+window into the Jetson AI Lab Discord (see *Domain* below). The rest of the
+intended pipeline — indexing what it reads and answering members' questions — is
+still TODO. Build it by *adding* verbs/nouns to this CLI (or new skills/
+subsystems) on top of the scaffold; the patterns below are how you do that.
 
-Be honest about this gap: don't describe the Discord/index features as if they
-exist. The README's "What you get" section still describes the template, not a
-shipped knowledge agent.
+Be honest about this gap: the agent can **read** the Jetson AI Lab Discord today,
+but it does not yet index sources or answer questions — don't describe those as
+if they exist. The README now documents the Discord read capability; everything
+else in "What you get" still describes the template.
+
+## Domain: the Jetson AI Lab Discord (read-only, public-only)
+
+The agent's job starts at the **Jetson AI Lab Research Group** Discord —
+**guild `1326246312072581160`** (~120 channels). The `jetson-discord-scan` skill
+(`.claude/skills/jetson-discord-scan/`) is the entry point and the first real
+domain code in the repo. Two constraints are **load-bearing — never relax them
+casually**:
+
+- **Read-only.** The bot token is read-scoped and the skill exposes *no* write
+  path: it wraps only the sibling **`discord-bot-cli`** *read* verbs
+  (`channel list`, `channel messages`). Never add post/react/thread calls here.
+- **Public channels only.** Private / role-gated channels are excluded from every
+  default code path; their names and contents must not leak into a scan result or
+  into the committed `data/channels.json`. "Public" = the guild's `@everyone` role
+  can `view_channel`. The stock `channel list` doesn't expose that, so
+  `scripts/channels.py` reuses `discord_bot_cli.discord_client.run()` *as a
+  library* (cite-don't-import — no tool edit) to add a `public` flag, then filters
+  on it. `channels --all` is the only opt-in that includes private channels.
+
+Operational facts: the token lives in **`DISCORD_BOT_TOKEN`** (read from the env,
+never a flag). `discord-bot-cli` needs its `[discord]` extra — the skill runs it
+from the sibling **`~/git/discord-bot-cli`** checkout's venv by default (override
+via `DISCORD_BOT_CLI_PROJECT` / `DISCORD_BOT_CLI`). `scan.sh active` ranks public
+text channels by last-30-day traffic (~100 channels in ~20s at `--par 8`).
+`data/channels.json` is a committed **public-only** channel-map snapshot.
 
 ## Running the CLI — the command-name trap
 
@@ -103,7 +133,11 @@ prefix is required by the rubric).
 command-path tuples (`("cli","overview")`) → verbatim markdown; `resolve()` looks
 up a path or raises `CliError`. A test (`test_every_catalog_path_resolves`)
 asserts every registered path has an entry — keep the catalog in sync with the
-verbs you add.
+verbs you add. Note the root entry is registered under **three** keys: `()`,
+`("jetson-ai-lab-cli",)` (the `prog`), **and `("jlab",)`** (the console-script
+name). The rubric derives the tool name from the console-script, so `explain jlab`
+must resolve — that dual key was an actual bug fix (commit `c3a8bb5`). If you ever
+reconcile the four names above, the `("jlab",)` key has to follow the script name.
 
 **Identity (`culture.yaml` + `whoami.py`).** `culture.yaml` declares the mesh
 agent (`suffix: jetson-ai-lab-cli`, `backend: claude`). `whoami`/`doctor` read it
@@ -146,10 +180,13 @@ new surface must keep these true, or the build fails:
   work needs libraries, that's a deliberate decision to discuss — don't quietly
   add deps to the runtime package.
 - **`from __future__ import annotations`** at the top of every module.
-- **Cite-don't-import skills.** `.claude/skills/` is vendored from **guildmaster**
-  (with three skills originating in **devague**). Provenance + re-sync procedure:
-  `docs/skill-sources.md`. Don't hand-edit script bodies; re-sync from upstream.
-  Every `SKILL.md` must carry `type: command` (load-bearing for the
+- **Cite-don't-import skills.** Most of `.claude/skills/` is vendored from
+  **guildmaster** (with three skills originating in **devague**). Provenance +
+  re-sync procedure: `docs/skill-sources.md`. Don't hand-edit vendored script
+  bodies; re-sync from upstream. **Exception:** `jetson-discord-scan` is
+  **locally authored** (origin = this repo, the agent's own domain code) — it is
+  *not* vendored and a re-sync must not clobber it; edit it here. Every `SKILL.md`
+  (vendored or local) must carry `type: command` (load-bearing for the
   culture/claude backend's `core.skill_loader`).
 
 ## CI & publishing
@@ -159,7 +196,11 @@ new surface must keep these true, or the build fails:
   bandit/markdownlint + the rubric gate), and `version-check` (PR-only).
 - **SonarCloud** gates CI when `SONAR_TOKEN` is set (`sonar.qualitygate.wait=true`
   in `sonar-project.properties`, project key `agentculture_jetson-ai-lab-cli`).
-  Token-less repos and fork PRs skip the scan and stay green.
+  Token-less repos and fork PRs skip the scan and stay green. **Footgun:** the
+  SonarCloud *web-side* "Automatic Analysis" must stay **OFF** — it conflicts with
+  the CI-based scan and makes the `test` job fail every PR with "you are running
+  CI analysis while Automatic Analysis is enabled." Toggle it off under the
+  project's Administration → Analysis Method, not in this repo.
 - **`.github/workflows/publish.yml`** — PyPI **Trusted Publishing** (OIDC, no
   tokens). PRs publish a `.devN` build to TestPyPI; pushes to `main` publish to
   PyPI. Triggers only on `pyproject.toml` / `jlab/**` changes.

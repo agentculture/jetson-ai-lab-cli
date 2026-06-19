@@ -1,0 +1,717 @@
+{
+  "_note": "PUBLIC channels only (private/role-gated channels are excluded). Snapshot of the Jetson AI Lab Discord. Refresh with: bash .claude/skills/jetson-discord-scan/scripts/scan.sh channels > .claude/skills/jetson-discord-scan/data/channels.json",
+  "_generated": "2026-06-19",
+  "guild_id": "1326246312072581160",
+  "guild_name": "Jetson AI Lab Research Group",
+  "public_channel_count": 118,
+  "channels": [
+    {
+      "id": "1326246312072581161",
+      "name": "Software Toolkits / Frameworks / API / SDK",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326246312072581163",
+      "name": "member-lounge",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326246312072581164",
+      "name": "Jetson AI Lab Research Group - Feb 11 9AM PT",
+      "type": "voice",
+      "public": true
+    },
+    {
+      "id": "1326247998744694875",
+      "name": "welcome",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326248463087833148",
+      "name": "announcements",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326248741212131381",
+      "name": "Compute Hardware",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326250828104994909",
+      "name": "jetson-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326253107008639127",
+      "name": "ROBOTics",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326253288097714250",
+      "name": "CAMERAS / SENSORS / OTHER DEVICES",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326253999975956561",
+      "name": "GEN AI & models",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326254251978264697",
+      "name": "HARDWARE KITS",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326254584863395880",
+      "name": "model-news",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326257467201683626",
+      "name": "jetson-getting-started",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326257503285153863",
+      "name": "jetson-debug",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326257851773223013",
+      "name": "nepi-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326258959698366547",
+      "name": "jetson-jetpack-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326262316676943904",
+      "name": "nvidia-resources",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326265329500033089",
+      "name": "Vision PROCESSING",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326265525021442252",
+      "name": "augmented-and-virtual-reality",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326265583959801886",
+      "name": "image-processing",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326266018351284244",
+      "name": "AI Assistants",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326266463408881725",
+      "name": "ai-assistants-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326604169129496606",
+      "name": "llm-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326604191501779115",
+      "name": "vlm-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326604444367982682",
+      "name": "rag-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326604647762497569",
+      "name": "nvidia-cosmos-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326611538471161877",
+      "name": "COMMUNITY",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326613341254189066",
+      "name": "COMMUNITY PROJECTS",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326613641897705482",
+      "name": "autonomous-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326613985390493716",
+      "name": "ar-vr-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326614061093359678",
+      "name": "robot-arm-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326614220820975719",
+      "name": "humanoid-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326624043864031263",
+      "name": "AUDIO PROCESSING",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326624141897367635",
+      "name": "speech-all",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326625829072932966",
+      "name": "audio-models-lam",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326630537120710757",
+      "name": "nvidia-isaac-sim-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326632328910340177",
+      "name": "jetson-containers-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326633366258319363",
+      "name": "events-community-virtual",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326977710580437143",
+      "name": "jetson-linux",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326983604026216479",
+      "name": "platform-aarch64",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326983692438077502",
+      "name": "platform-amd64-x86_64",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326985204019105973",
+      "name": "gaussian-splatting",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326992235669098556",
+      "name": "drone-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326994322456973333",
+      "name": "MORE (including VOICE CHATS)",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1326994373308711103",
+      "name": "server-questions-suggestions❓",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1326994542456475678",
+      "name": "OfficeHours-02",
+      "type": "voice",
+      "public": true
+    },
+    {
+      "id": "1326994580100354170",
+      "name": "OfficeHours-03",
+      "type": "voice",
+      "public": true
+    },
+    {
+      "id": "1326994624862228591",
+      "name": "OfficeHours-04",
+      "type": "voice",
+      "public": true
+    },
+    {
+      "id": "1326999639936995368",
+      "name": "tech-clusters",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327001487704068128",
+      "name": "depth-and-tracking",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327004025765236786",
+      "name": "perception-cameras",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327123681314476085",
+      "name": "os-linux-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327123742068834344",
+      "name": "os-linux-help",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327139988932001832",
+      "name": "lidar-sensors",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327140594333515837",
+      "name": "opensource-models-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327280948898955337",
+      "name": "dlfw-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327691124739145768",
+      "name": "cluster-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327691297032507445",
+      "name": "robotics-news",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327692247394816010",
+      "name": "hardware-kits-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327718435047866408",
+      "name": "3d-printing-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327720609106366484",
+      "name": "nvda-jetson-agx-orin",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327720920206282864",
+      "name": "nvda-jetson-orin-nano",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327721113756762122",
+      "name": "nvda-jetson-orin-nx",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327721424982638763",
+      "name": "nvda-jetson-nano-tx2-xavier",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327741531930755094",
+      "name": "maker-diy-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1327746762085240926",
+      "name": "multimodal-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1328441024577667123",
+      "name": "DEEP LEARNING",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1328441237191000166",
+      "name": "deep-learning-news",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1328441356967874560",
+      "name": "dl-tools-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1328442358844489824",
+      "name": "robot-rtr-kits",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1328806241496989866",
+      "name": "member-introductions",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1329508136087978014",
+      "name": "ros2-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1329509357959909476",
+      "name": "ros2-gazebo-sim-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1329513353315352678",
+      "name": "robot-simulation-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1331311984800432139",
+      "name": "event-jetson-ai-lab-research-live",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1332237358330019911",
+      "name": "video-post-processing",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1333532648907477056",
+      "name": "event-nvda-gtc2025",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1333560458338238515",
+      "name": "deep-learning-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1333560589288607744",
+      "name": "dl-research-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1334240721137434734",
+      "name": "random",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1334242031794389032",
+      "name": "robotics-reinforcement-learning",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1336426419256954920",
+      "name": "vla-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1336428195129462826",
+      "name": "robot-learning",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1336435279569092740",
+      "name": "events",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1336776888336650260",
+      "name": "nvidia-deepstream-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1344209427062067275",
+      "name": "getting-started-assistants",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1344209495890333727",
+      "name": "getting-effective-agents",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1347617574514589787",
+      "name": "woulda-shoulda-cuda",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1353148068979146832",
+      "name": "event-seeedstudio-gtc2025",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1353807801931137034",
+      "name": "ros2vlx",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1354125604051751103",
+      "name": "nvidia-gr00t-n1-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1354172491840622672",
+      "name": "nvda-jetson-thor",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1366825037474300035",
+      "name": "home-assistant-projects",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1366827636357075088",
+      "name": "mcp-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1383819851491053579",
+      "name": "a2a-agent-to-agent-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1388094030923173981",
+      "name": "genai-papers-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1405689195862818979",
+      "name": "bot-news",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1407337283794767873",
+      "name": "bot-experimentations",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1413228896333336616",
+      "name": "event-nvda-gtc2026",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1413665317695127672",
+      "name": "nvidia-platform-cuda",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1415048201890693312",
+      "name": "community-articles",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1427964860573945856",
+      "name": "nvda-dgx-spark",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1427965089503248426",
+      "name": "nvidia-isaac-ros",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1431526893475074098",
+      "name": "event-seeedstudio-hackathon-october2025",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1433485063277907978",
+      "name": "ANNOUNCEMENTS & EVENTS",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1433485925341466765",
+      "name": "events-nvidia-virtual",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1433558962694783106",
+      "name": "events-hackathons",
+      "type": "forum",
+      "public": true
+    },
+    {
+      "id": "1440586756155244585",
+      "name": "Archived-channels",
+      "type": "category",
+      "public": true
+    },
+    {
+      "id": "1461808693225066640",
+      "name": "open-to-work",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1467951291597717712",
+      "name": "server-request-help☎️",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1471097949240164383",
+      "name": "event-community-hours",
+      "type": "voice",
+      "public": true
+    },
+    {
+      "id": "1472662749216637062",
+      "name": "local-coding-agents",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1475938851154301181",
+      "name": "jetson-prod-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1481533542482706563",
+      "name": "autonomous-agents",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1484236242320228474",
+      "name": "event-seeedstudio-gtc2026",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1497287444385632266",
+      "name": "event-nvda-gtc2026-taipei",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1497628878699495434",
+      "name": "jetson-networking-discuss",
+      "type": "text",
+      "public": true
+    },
+    {
+      "id": "1513910060705775807",
+      "name": "community-building",
+      "type": "text",
+      "public": true
+    }
+  ]
+}
