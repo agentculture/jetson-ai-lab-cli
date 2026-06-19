@@ -455,19 +455,39 @@ class _FakeGuild:
 
 
 class _FakeClient:
-    def __init__(self, guild: _FakeGuild) -> None:
+    def __init__(self, guild: _FakeGuild, channel: _FakeChannel | None = None) -> None:
         self._guild = guild
+        self._channel = channel
 
     async def fetch_guild(self, _gid: int) -> _FakeGuild:
         return self._guild
 
+    async def fetch_channel(self, _cid: int) -> _FakeChannel:
+        return self._channel
+
 
 class _FakeSeam:
-    def __init__(self, guild: _FakeGuild) -> None:
+    """Stand-in for discord_bot_cli.discord_client.
+
+    ``run`` executes the action against a fake client; ``parse_id`` mimics the
+    upstream id parser (override via *id_parser* to exercise error paths).
+    """
+
+    def __init__(
+        self,
+        guild: _FakeGuild | None = None,
+        channel: _FakeChannel | None = None,
+        id_parser=None,
+    ) -> None:
         self._guild = guild
+        self._channel = channel
+        self._id_parser = id_parser or (lambda value, label: int(value))
 
     def run(self, action):
-        return asyncio.run(action(_FakeClient(self._guild)))
+        return asyncio.run(action(_FakeClient(self._guild, self._channel)))
+
+    def parse_id(self, value: str, label: str) -> int:
+        return self._id_parser(value, label)
 
 
 def test_active_scan_ranks_and_serializes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -532,3 +552,99 @@ def test_active_scan_empty_when_no_active(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["probed_text_channels"] == 1
     assert result["active_channels"] == 0
     assert result["channels"] == []
+
+
+# ---------------------------------------------------------------------------
+# Adapter functions — exercised against the fake seam (real bodies, no mocks).
+# ---------------------------------------------------------------------------
+
+
+def test_seam_missing_extra_raises_env_error() -> None:
+    """The real _seam raises CliError(2) when discord_bot_cli is absent."""
+    # discord_bot_cli is not installed in the test env (optional [discord] extra).
+    with pytest.raises(CliError) as exc:
+        _discord._seam()
+    assert exc.value.code == 2
+    assert "discord-bot-cli" in exc.value.message
+    assert exc.value.remediation
+
+
+def test_list_channels_public_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = _FakeGuild(
+        [
+            _FakeChannel("c1", "general", "text", True, []),
+            _FakeChannel("c2", "secret", "text", False, []),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    public = _discord.list_channels(123, public_only=True)
+    assert [c["name"] for c in public] == ["general"]
+    assert public[0]["public"] is True
+
+    every = _discord.list_channels(123, public_only=False)
+    assert {c["name"] for c in every} == {"general", "secret"}
+
+
+def test_list_channels_unknown_perms_treated_nonpublic(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Boom(_FakeChannel):
+        def permissions_for(self, _role: object):
+            raise RuntimeError("perms unavailable")
+
+    guild = _FakeGuild([_Boom("c9", "weird", "text", True, [])])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    # Unknown perms => public=None => dropped from the public-only default.
+    assert _discord.list_channels(123, public_only=True) == []
+    every = _discord.list_channels(123, public_only=False)
+    assert every[0]["public"] is None
+
+
+def test_read_messages_serializes(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c1",
+        "general",
+        "text",
+        True,
+        [_FakeMsg("m0", "ann", "first", now), _FakeMsg("m1", "bob", "second", now)],
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    msgs = _discord.read_messages(999, limit=5)
+    assert [m["author"]["name"] for m in msgs] == ["ann", "bob"]  # oldest-first
+    assert msgs[0]["content"] == "first"
+    assert msgs[0]["created_at"] is not None
+
+
+def test_read_messages_rejects_bad_limit() -> None:
+    for bad in (0, 101):
+        with pytest.raises(CliError) as exc:
+            _discord.read_messages(999, limit=bad)
+        assert exc.value.code == 1
+
+
+def test_parse_id_happy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam())
+    assert _discord.parse_id("42", "channel_id") == 42
+
+
+def test_parse_id_invalid_translates_to_user_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(value: str, label: str) -> int:
+        raise ValueError("not numeric")
+
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(id_parser=boom))
+    with pytest.raises(CliError) as exc:
+        _discord.parse_id("abc", "channel_id")
+    assert exc.value.code == 1
+    assert "channel_id" in exc.value.message
+
+
+def test_guild_id_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JLAB_GUILD_ID", "777")
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam())
+    assert _discord._guild_id() == 777
+
+
+def test_doctor_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    assert _discord.doctor(123) == {"ok": True, "guild_id": "123"}
