@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -648,3 +650,98 @@ def test_doctor_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
     assert _discord.doctor(123) == {"ok": True, "guild_id": "123"}
+
+
+# ---------------------------------------------------------------------------
+# _run — translate discord-bot-cli errors into the 0/1/2 jlab contract.
+# ---------------------------------------------------------------------------
+
+
+class _RaisingSeam:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def run(self, _action):
+        raise self._exc
+
+
+def _inject_fake_db_clierror(monkeypatch: pytest.MonkeyPatch):
+    """Make ``discord_bot_cli.cli._errors.CliError`` importable (it's not installed)."""
+
+    class _DBCliError(Exception):
+        def __init__(self, code: int, message: str, remediation: str) -> None:
+            super().__init__(message)
+            self.code = code
+            self.message = message
+            self.remediation = remediation
+
+    errors_mod = types.ModuleType("discord_bot_cli.cli._errors")
+    errors_mod.CliError = _DBCliError
+    monkeypatch.setitem(sys.modules, "discord_bot_cli", types.ModuleType("discord_bot_cli"))
+    monkeypatch.setitem(sys.modules, "discord_bot_cli.cli", types.ModuleType("discord_bot_cli.cli"))
+    monkeypatch.setitem(sys.modules, "discord_bot_cli.cli._errors", errors_mod)
+    return _DBCliError
+
+
+def test_run_preserves_upstream_clierror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upstream CliError (e.g. missing token) keeps its code 2 + remediation."""
+    db_err = _inject_fake_db_clierror(monkeypatch)
+    upstream = db_err(2, "DISCORD_BOT_TOKEN not set", "export DISCORD_BOT_TOKEN=...")
+    monkeypatch.setattr(_discord, "_seam", lambda: _RaisingSeam(upstream))
+    with pytest.raises(CliError) as exc:
+        _discord.list_channels(123)
+    assert exc.value.code == 2  # NOT mis-wrapped as exit 1
+    assert exc.value.message == "DISCORD_BOT_TOKEN not set"
+    assert exc.value.remediation == "export DISCORD_BOT_TOKEN=..."
+
+
+def test_run_wraps_unknown_exception_as_env_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_discord, "_seam", lambda: _RaisingSeam(RuntimeError("boom")))
+    with pytest.raises(CliError) as exc:
+        _discord.list_channels(123)
+    assert exc.value.code == 2
+    assert "Discord request failed" in exc.value.message
+    assert exc.value.remediation
+
+
+def test_active_scan_tolerates_one_failing_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single channel whose history read fails must not abort the whole scan."""
+    now = datetime.now(timezone.utc)
+
+    class _BoomChannel(_FakeChannel):
+        def history(self, limit: int):
+            raise RuntimeError("cannot read history")
+
+    guild = _FakeGuild(
+        [
+            _FakeChannel(
+                "c1",
+                "general",
+                "text",
+                True,
+                [_FakeMsg("m0", "ann", "hi", now - timedelta(days=1))],
+            ),
+            _BoomChannel("c2", "flaky", "text", True, []),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    result = _discord.active_scan(123, since_days=30, fetch_limit=5)
+    assert result["probed_text_channels"] == 2  # both probed
+    assert [c["name"] for c in result["channels"]] == ["general"]  # flaky tolerated, not ranked
+
+
+def test_active_scan_top_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+
+    def msgs(author: str, n: int) -> list:
+        return [_FakeMsg(f"{author}{i}", author, "hi", now - timedelta(hours=i)) for i in range(n)]
+
+    guild = _FakeGuild(
+        [
+            _FakeChannel("c1", "a", "text", True, msgs("a", 1)),
+            _FakeChannel("c2", "b", "text", True, msgs("b", 3)),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    result = _discord.active_scan(123, since_days=30, fetch_limit=10, top=1)
+    assert [c["name"] for c in result["channels"]] == ["b"]  # only the top-1 most active

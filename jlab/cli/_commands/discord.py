@@ -13,6 +13,8 @@ import argparse
 from jlab.cli import _discord
 from jlab.cli._output import emit_diagnostic, emit_result
 
+_JSON_HELP = "Emit structured JSON."
+
 
 def _no_verb(args: argparse.Namespace) -> int:
     """Print the noun's overview when no sub-verb is given."""
@@ -160,7 +162,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         "discord",
         help="Read-only Discord scan (channels, read, active, doctor).",
     )
-    p.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    p.add_argument("--json", action="store_true", help=_JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
     noun_sub = p.add_subparsers(dest="discord_command", parser_class=type(p))
 
@@ -174,7 +176,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Include private/role-gated channels too.",
     )
-    ch.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ch.add_argument("--json", action="store_true", help=_JSON_HELP)
     ch.set_defaults(func=cmd_discord_channels, json=False)
 
     # read
@@ -189,7 +191,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         default=20,
         help="Messages to fetch (1-100, default 20).",
     )
-    rd.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    rd.add_argument("--json", action="store_true", help=_JSON_HELP)
     rd.set_defaults(func=cmd_discord_read, json=False)
 
     # active
@@ -221,7 +223,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         default=5,
         help="Messages echoed per active channel (default 5).",
     )
-    ac.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ac.add_argument("--json", action="store_true", help=_JSON_HELP)
     ac.set_defaults(func=cmd_discord_active, json=False)
 
     # doctor
@@ -229,7 +231,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         "doctor",
         help="Verify token + guild readable.",
     )
-    dr.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    dr.add_argument("--json", action="store_true", help=_JSON_HELP)
     dr.set_defaults(func=cmd_discord_doctor, json=False)
 
     # overview
@@ -237,5 +239,5 @@ def register(sub: argparse._SubParsersAction) -> None:
         "overview",
         help="Describe the discord noun group.",
     )
-    ov.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    ov.add_argument("--json", action="store_true", help=_JSON_HELP)
     ov.set_defaults(func=cmd_discord_overview, json=False)

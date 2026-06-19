@@ -7,7 +7,9 @@ upstream package, so an upstream API change touches one file.
 Lazy-import: ``discord_bot_cli`` is **never** imported at module scope.
 The private ``_seam()`` does the import inside a try/except and raises
 a structured :class:`jlab.cli._errors.CliError` (code 2) when the
-optional ``[discord]`` extra is absent.
+optional ``[discord]`` extra is absent. Both transport entry points
+(:func:`parse_id` and :func:`_run`) translate discord-bot-cli's own
+``CliError`` into jlab's so the 0/1/2 exit-code contract is preserved.
 """
 
 from __future__ import annotations
@@ -44,32 +46,65 @@ def _seam() -> Any:
     return discord_client
 
 
+def _as_cli_error(exc: Exception, *, code: int, message: str, remediation: str) -> CliError:
+    """Translate an exception into jlab's :class:`CliError`.
+
+    A jlab ``CliError`` passes through unchanged. discord-bot-cli's own
+    ``CliError`` is preserved verbatim (its ``code``/``message``/``remediation``)
+    so an environment failure stays exit 2 with its remediation, instead of
+    being wrapped as a generic exit-1 "unexpected" by ``_dispatch``. Anything
+    else gets the supplied fallback.
+    """
+    if isinstance(exc, CliError):
+        return exc
+    try:
+        from discord_bot_cli.cli._errors import CliError as _DBCliError  # noqa: F811
+    except ImportError:
+        _DBCliError = ()  # type: ignore[assignment]
+    if _DBCliError and isinstance(exc, _DBCliError):
+        return CliError(code=exc.code, message=exc.message, remediation=exc.remediation)
+    return CliError(code=code, message=message, remediation=remediation)
+
+
+def _run(action: Any) -> Any:
+    """Run a ``discord_client`` action, translating failures to :class:`CliError`.
+
+    discord-bot-cli raises its own ``CliError`` for missing token / rejected
+    token / unreadable guild (exit 2). Translating here keeps those as exit-2
+    environment errors with their remediation rather than generic exit-1.
+    """
+    dc = _seam()
+    try:
+        return dc.run(action)
+    except Exception as exc:  # noqa: BLE001 - translate to the jlab error contract
+        raise _as_cli_error(
+            exc,
+            code=2,
+            message=f"Discord request failed: {exc}",
+            remediation="check DISCORD_BOT_TOKEN and that the bot can read the guild",
+        ) from exc
+
+
 def parse_id(value: str, label: str) -> int:
     """Parse a numeric id string, translating errors to :class:`CliError`."""
     dc = _seam()
     try:
         return dc.parse_id(value, label)
-    except Exception as e:  # noqa: BLE001
-        # Translate discord_bot_cli CliError into jlab's.
-        try:
-            from discord_bot_cli.cli._errors import CliError as _DBCliError  # noqa: F811
-        except ImportError:
-            raise CliError(
-                code=1,
-                message=f"invalid {label}: {value!r}",
-                remediation="pass a numeric id",
-            ) from e
-        if isinstance(e, _DBCliError):
-            raise CliError(
-                code=e.code,
-                message=e.message,
-                remediation=e.remediation,
-            ) from e
-        raise CliError(
+    except Exception as exc:  # noqa: BLE001
+        raise _as_cli_error(
+            exc,
             code=1,
             message=f"invalid {label}: {value!r}",
             remediation="pass a numeric id",
-        ) from e
+        ) from exc
+
+
+def _channel_public(channel: Any, everyone: Any) -> bool | None:
+    """Whether ``@everyone`` can view *channel* (``None`` if perms are unknown)."""
+    try:
+        return bool(channel.permissions_for(everyone).view_channel)
+    except Exception:  # noqa: BLE001 - unknown perms => report, don't crash
+        return None
 
 
 def list_channels(guild_id: int, public_only: bool = True) -> list[dict]:
@@ -78,28 +113,21 @@ def list_channels(guild_id: int, public_only: bool = True) -> list[dict]:
     When *public_only* is ``True`` (the default), drop entries whose
     ``public`` field is not ``True``.
     """
-    dc = _seam()
 
     async def action(client: Any) -> list[dict]:
         guild = await client.fetch_guild(guild_id)
         everyone = guild.default_role
-        out: list[dict] = []
-        for c in await guild.fetch_channels():
-            try:
-                public = bool(c.permissions_for(everyone).view_channel)
-            except Exception:  # noqa: BLE001
-                public = None
-            out.append(
-                {
-                    "id": str(c.id),
-                    "name": c.name,
-                    "type": str(getattr(c.type, "name", c.type)),
-                    "public": public,
-                }
-            )
-        return out
+        return [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "type": str(getattr(c.type, "name", c.type)),
+                "public": _channel_public(c, everyone),
+            }
+            for c in await guild.fetch_channels()
+        ]
 
-    channels = dc.run(action)
+    channels = _run(action)
     if public_only:
         channels = [c for c in channels if c.get("public") is True]
     return channels
@@ -117,12 +145,10 @@ def read_messages(channel_id: int, limit: int = 20) -> list[dict]:
             remediation="pass a value between 1 and 100",
         )
 
-    dc = _seam()
-
     async def action(client: Any) -> list[dict]:
         channel = await client.fetch_channel(channel_id)
         collected = [m async for m in channel.history(limit=limit)]
-        collected.reverse()
+        collected.reverse()  # history yields newest-first; emit oldest-first
         return [
             {
                 "id": str(m.id),
@@ -133,7 +159,57 @@ def read_messages(channel_id: int, limit: int = 20) -> list[dict]:
             for m in collected
         ]
 
-    return dc.run(action)
+    return _run(action)
+
+
+def _rank_channel(chan: dict, cutoff: datetime, fetch_limit: int, preview: int) -> dict | None:
+    """Build a ranked row for *chan*, or ``None`` if it is inactive in the window."""
+    stamped = [
+        (m, datetime.fromisoformat(m["created_at"])) for m in chan["messages"] if m["created_at"]
+    ]
+    if not stamped:
+        return None
+    newest = max(t for _, t in stamped)
+    if newest < cutoff:
+        return None
+    in_window = [m for m, t in stamped if t >= cutoff]
+    return {
+        "id": chan["id"],
+        "name": chan["name"],
+        "last_post": newest.isoformat(),
+        "msgs_in_window": len(in_window),
+        "saturated": len(in_window) == fetch_limit,
+        "preview": [
+            {"author": m["author"], "content": m["content"], "created_at": m["created_at"]}
+            for m in chan["messages"][-preview:]
+        ],
+    }
+
+
+async def _probe_channel(channel: Any, fetch_limit: int) -> dict:
+    """Serialize a channel's recent messages to plain dicts inside the session.
+
+    A per-channel failure (permissions, transient API error) yields an empty
+    message list rather than aborting the whole scan — matching the tolerant
+    behaviour of the original ``scan.sh``.
+    """
+    try:
+        msgs = [m async for m in channel.history(limit=fetch_limit)]
+        msgs.reverse()
+    except Exception:  # noqa: BLE001 - one bad channel must not abort the scan
+        msgs = []
+    return {
+        "id": str(channel.id),
+        "name": channel.name,
+        "messages": [
+            {
+                "author": m.author.name,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in msgs
+        ],
+    }
 
 
 def active_scan(
@@ -145,86 +221,30 @@ def active_scan(
 ) -> dict:
     """Shallow scan: rank active public text channels by recent traffic.
 
-    Uses a **single** ``discord_client.run(action)`` session with
-    ``asyncio.gather`` for per-channel history reads, then ranks in-process.
+    Uses a **single** ``discord_client.run`` session with ``asyncio.gather``
+    for per-channel history reads (each tolerant of its own failure), then ranks
+    in-process. Discord objects are serialized inside the session and never
+    escape the closing client.
     """
-    dc = _seam()
 
     async def action(client: Any) -> list[dict]:
         guild = await client.fetch_guild(guild_id)
         everyone = guild.default_role
+        text_channels = [
+            c
+            for c in await guild.fetch_channels()
+            if getattr(c.type, "name", c.type) == "text" and _channel_public(c, everyone) is True
+        ]
+        return list(await asyncio.gather(*[_probe_channel(c, fetch_limit) for c in text_channels]))
 
-        # Collect public text channels.
-        text_channels: list[Any] = []
-        for c in await guild.fetch_channels():
-            ctype = getattr(c.type, "name", c.type)
-            if ctype != "text":
-                continue
-            try:
-                public = bool(c.permissions_for(everyone).view_channel)
-            except Exception:  # noqa: BLE001
-                public = None
-            if public is not True:
-                continue
-            text_channels.append(c)
-
-        # Fetch history for every public text channel in parallel, and
-        # serialize to plain dicts *inside* the session — Discord objects must
-        # not escape the (about-to-close) client.
-        async def _fetch(ch: Any) -> dict:
-            msgs = [m async for m in ch.history(limit=fetch_limit)]
-            msgs.reverse()
-            return {
-                "id": str(ch.id),
-                "name": ch.name,
-                "messages": [
-                    {
-                        "author": m.author.name,
-                        "content": m.content,
-                        "created_at": m.created_at.isoformat() if m.created_at else None,
-                    }
-                    for m in msgs
-                ],
-            }
-
-        return list(await asyncio.gather(*[_fetch(ch) for ch in text_channels]))
-
-    probed = dc.run(action)
-
+    probed = _run(action)
     cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
 
-    rows: list[dict] = []
-    for chan in probed:
-        # Only messages carrying a timestamp can be ranked by recency.
-        stamped = [
-            (m, datetime.fromisoformat(m["created_at"]))
-            for m in chan["messages"]
-            if m["created_at"]
-        ]
-        if not stamped:
-            continue
-        newest = max(t for _, t in stamped)
-        if newest < cutoff:
-            continue
-        in_window = [m for m, t in stamped if t >= cutoff]
-        rows.append(
-            {
-                "id": chan["id"],
-                "name": chan["name"],
-                "last_post": newest.isoformat(),
-                "msgs_in_window": len(in_window),
-                "saturated": len(in_window) == fetch_limit,
-                "preview": [
-                    {
-                        "author": m["author"],
-                        "content": m["content"],
-                        "created_at": m["created_at"],
-                    }
-                    for m in chan["messages"][-preview:]
-                ],
-            }
-        )
-
+    rows = [
+        row
+        for chan in probed
+        if (row := _rank_channel(chan, cutoff, fetch_limit, preview)) is not None
+    ]
     rows.sort(key=lambda r: (r["msgs_in_window"], r["last_post"]), reverse=True)
     if top > 0:
         rows = rows[:top]
