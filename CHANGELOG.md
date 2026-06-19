@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-19
+
+### Added
+
+- `jlab discord` noun group — read-only, public-only scan of the Jetson AI Lab Discord (`channels`, `read`, `active`, `doctor`, `overview`), folding the jetson-discord-scan skill into the agent-first CLI.
+- Optional `[discord]` extra (`discord-bot-cli`), lazy-imported — core install stays dependency-free.
+- `jlab/cli/_discord.py` adapter isolating all discord-bot-cli coupling behind one module.
+
+### Changed
+
+- jetson-discord-scan skill reduced to a thin shim delegating to `jlab discord`; `channels.py` removed (logic moved into the CLI).
+- CLAUDE.md notes the AgentCulture-sibling optional-dep exception to the zero-runtime-deps rule.
+- markdownlint ignores devague-generated artifacts (docs/specs, docs/reviews, .devague).
+
+### Fixed
+
+- Committed `data/channels.json` snapshot dropped — the tool pulls fresh and never commits Discord data.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added
