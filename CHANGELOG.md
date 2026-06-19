@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-19
+
+### Added
+
+- jetson-discord-scan skill — read-only shallow scan of the Jetson AI Lab Discord (public channels only). Lists public channels, reads a channel's recent messages, and ranks public text channels by last-30-day traffic, wrapping the sibling discord-bot-cli read verbs. scripts/channels.py reuses discord_bot_cli.discord_client.run() as a library to add a public/private flag the stock channel list omits.
+- data/channels.json — committed public-only channel-map snapshot of the Jetson AI Lab Discord (118 public channels).
+
+### Changed
+
+- CLAUDE.md + README.md now document the read-only, public-only Discord domain capability (the first slice of real domain functionality) and its load-bearing constraints.
+- CLAUDE.md: documented the dual-key explain catalog (explain jlab must resolve) and the SonarCloud Automatic-Analysis-must-stay-off CI footgun.
+
 ## [0.1.2] - 2026-05-30
 
 ### Changed

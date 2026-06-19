@@ -2,8 +2,15 @@
 
 Discord-facing knowledge fetch & index agent for the Jetson AI Lab community — fetches and indexes Jetson AI Lab docs/sources and answers members' questions on Discord.
 
+> **Status:** the read side is real, the rest is still scaffold. The agent can
+> **scan the Jetson AI Lab Discord read-only today** (see below); indexing what it
+> reads and answering members' questions are not built yet.
+
 ## What you get
 
+- **A read-only Jetson AI Lab Discord scanner** — the `jetson-discord-scan` skill,
+  the first slice of the agent's actual job. See
+  [Jetson AI Lab Discord](#jetson-ai-lab-discord-read-only).
 - **An agent-first CLI** cited from [teken](https://github.com/agentculture/teken)
   (`afi-cli`) — the runtime package has no third-party dependencies.
 - **A mesh identity** — `culture.yaml` (`suffix` + `backend`) and the matching
@@ -37,6 +44,29 @@ uv run teken cli doctor . --strict    # the agent-first rubric gate CI runs
 Every command supports `--json`. Results go to stdout, errors/diagnostics to
 stderr (never mixed). Exit codes: `0` success, `1` user error, `2` environment
 error, `3+` reserved.
+
+## Jetson AI Lab Discord (read-only)
+
+The agent's intended job starts at the **Jetson AI Lab Research Group** Discord.
+The [`jetson-discord-scan`](.claude/skills/jetson-discord-scan/SKILL.md) skill
+gives it a **read-only** window into that server. It wraps the read verbs of the
+sibling [`discord-bot-cli`](https://github.com/agentculture/discord-bot-cli) —
+it never posts, reacts, or creates threads — and it scans **public channels
+only** (private / role-gated channels are always excluded).
+
+```bash
+S=.claude/skills/jetson-discord-scan/scripts/scan.sh
+
+bash $S doctor                              # token present + guild readable?
+bash $S active --since 30 --top 15          # public channels active in the last month, by traffic
+bash $S channels                            # public channel map (each tagged "public": true)
+bash $S read <channel_id> --limit 50        # recent messages of one channel
+```
+
+Needs a **read-scoped** bot token in `DISCORD_BOT_TOKEN` and `discord-bot-cli`
+with its `[discord]` extra. Results are JSON on stdout; errors/diagnostics on
+stderr. A committed public-only channel-map snapshot lives at
+[`data/channels.json`](.claude/skills/jetson-discord-scan/data/channels.json).
 
 ## Make it your own
 

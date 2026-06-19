@@ -30,6 +30,17 @@ is load-bearing, even where guildmaster's upstream copy omits it.
 | `spec-to-plan` | `../guildmaster/.claude/skills/spec-to-plan/` | **devague** (re-broadcast via guildmaster) | spec→plan leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
 | `assign-to-workforce` | `../guildmaster/.claude/skills/assign-to-workforce/` | **devague** (re-broadcast via guildmaster) | plan→parallel-implementation leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
 
+## Locally-authored skills (not vendored)
+
+These originate in **jetson-ai-lab-cli** itself — the agent's own domain
+functionality — and are **not** synced from guildmaster. Do not overwrite them
+during a re-sync; if a capability becomes generally useful, lift it upstream
+into guildmaster deliberately rather than letting a sync clobber it.
+
+| Skill | Origin | Notes |
+|-------|--------|-------|
+| `jetson-discord-scan` | jetson-ai-lab-cli | Read-only shallow scan of the Jetson AI Lab Discord (guild `1326246312072581160`). Wraps the sibling **`discord-bot-cli`** read verbs (`channel list` / `channel messages`) — never writes. `scripts/channels.py` reuses `discord_bot_cli.discord_client.run()` as a library (cite-don't-import, no tool edit) to add a `public` flag the stock `channel list` omits, so the scan and the committed `data/channels.json` cover **public channels only**. Requires `DISCORD_BOT_TOKEN` (read-scoped) and `discord-bot-cli[discord]` (default: the `~/git/discord-bot-cli` checkout's venv). |
+
 ## Re-sync procedure
 
 ```bash
