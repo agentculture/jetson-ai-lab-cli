@@ -52,9 +52,7 @@ def parse_id(value: str, label: str) -> int:
     except Exception as e:  # noqa: BLE001
         # Translate discord_bot_cli CliError into jlab's.
         try:
-            from discord_bot_cli.cli._errors import (
-                CliError as _DBCliError,  # noqa: F811
-            )
+            from discord_bot_cli.cli._errors import CliError as _DBCliError  # noqa: F811
         except ImportError:
             raise CliError(
                 code=1,
@@ -152,7 +150,7 @@ def active_scan(
     """
     dc = _seam()
 
-    async def action(client: Any) -> dict:
+    async def action(client: Any) -> list[dict]:
         guild = await client.fetch_guild(guild_id)
         everyone = guild.default_role
 
@@ -170,50 +168,59 @@ def active_scan(
                 continue
             text_channels.append(c)
 
-        # Fetch history for every public text channel in parallel.
-        async def _fetch(ch: Any) -> list[Any]:
+        # Fetch history for every public text channel in parallel, and
+        # serialize to plain dicts *inside* the session — Discord objects must
+        # not escape the (about-to-close) client.
+        async def _fetch(ch: Any) -> dict:
             msgs = [m async for m in ch.history(limit=fetch_limit)]
             msgs.reverse()
-            return msgs
+            return {
+                "id": str(ch.id),
+                "name": ch.name,
+                "messages": [
+                    {
+                        "author": m.author.name,
+                        "content": m.content,
+                        "created_at": m.created_at.isoformat() if m.created_at else None,
+                    }
+                    for m in msgs
+                ],
+            }
 
-        histories = await asyncio.gather(*[_fetch(ch) for ch in text_channels])
+        return list(await asyncio.gather(*[_fetch(ch) for ch in text_channels]))
 
-        return {
-            "text_channels": text_channels,
-            "histories": histories,
-        }
-
-    result = dc.run(action)
-    text_channels = result["text_channels"]
-    histories = result["histories"]
+    probed = dc.run(action)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
 
     rows: list[dict] = []
-    for ch, msgs in zip(text_channels, histories):
-        if not msgs:
+    for chan in probed:
+        # Only messages carrying a timestamp can be ranked by recency.
+        stamped = [
+            (m, datetime.fromisoformat(m["created_at"]))
+            for m in chan["messages"]
+            if m["created_at"]
+        ]
+        if not stamped:
             continue
-        newest = max(
-            (datetime.fromisoformat(m["created_at"]) for m in msgs),
-            default=None,
-        )
-        if newest is None or newest < cutoff:
+        newest = max(t for _, t in stamped)
+        if newest < cutoff:
             continue
-        in_window = [m for m in msgs if datetime.fromisoformat(m["created_at"]) >= cutoff]
+        in_window = [m for m, t in stamped if t >= cutoff]
         rows.append(
             {
-                "id": str(ch.id),
-                "name": ch.name,
+                "id": chan["id"],
+                "name": chan["name"],
                 "last_post": newest.isoformat(),
                 "msgs_in_window": len(in_window),
                 "saturated": len(in_window) == fetch_limit,
                 "preview": [
                     {
-                        "author": m["author"]["name"],
+                        "author": m["author"],
                         "content": m["content"],
                         "created_at": m["created_at"],
                     }
-                    for m in msgs[-preview:]
+                    for m in chan["messages"][-preview:]
                 ],
             }
         )
@@ -226,7 +233,7 @@ def active_scan(
         "guild_id": str(guild_id),
         "since_days": since_days,
         "fetch_limit": fetch_limit,
-        "probed_text_channels": len(text_channels),
+        "probed_text_channels": len(probed),
         "active_channels": len(rows),
         "channels": rows,
     }

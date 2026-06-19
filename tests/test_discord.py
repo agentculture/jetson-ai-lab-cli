@@ -6,11 +6,13 @@ Discord or requires a token.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from jlab.cli import main
+from jlab.cli import _discord, main
 from jlab.cli._errors import CliError
 
 # ---------------------------------------------------------------------------
@@ -386,3 +388,147 @@ def test_explain_discord_paths_resolve(path: list[str], capsys: pytest.CaptureFi
     assert rc == 0, f"explain {' '.join(path)} failed"
     out = capsys.readouterr().out
     assert out.strip()
+
+
+# ---------------------------------------------------------------------------
+# active_scan — real ranking logic against fake Discord objects.
+#
+# The verb-level tests above monkeypatch active_scan entirely, so they never
+# exercise its serialize/rank internals. These fakes drive the real function:
+# they would fail if Discord objects leaked past the session (the dict-vs-object
+# regression) or if ranking/cutoff/saturation were wrong.
+# ---------------------------------------------------------------------------
+
+
+class _FakeType:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakePerms:
+    def __init__(self, view: bool) -> None:
+        self.view_channel = view
+
+
+class _FakeAuthor:
+    def __init__(self, id: str, name: str) -> None:
+        self.id = id
+        self.name = name
+
+
+class _FakeMsg:
+    def __init__(self, id: str, author: str, content: str, created_at: datetime) -> None:
+        self.id = id
+        self.author = _FakeAuthor(id + "a", author)
+        self.content = content
+        self.created_at = created_at
+
+
+class _FakeChannel:
+    def __init__(self, id: str, name: str, type_name: str, public: bool, messages: list) -> None:
+        self.id = id
+        self.name = name
+        self.type = _FakeType(type_name)
+        self._public = public
+        self._messages = messages  # oldest-first
+
+    def permissions_for(self, _role: object) -> _FakePerms:
+        return _FakePerms(self._public)
+
+    def history(self, limit: int):
+        newest_first = list(reversed(self._messages))[:limit]
+
+        async def _gen():
+            for m in newest_first:
+                yield m
+
+        return _gen()
+
+
+class _FakeGuild:
+    def __init__(self, channels: list) -> None:
+        self.default_role = object()
+        self._channels = channels
+
+    async def fetch_channels(self) -> list:
+        return self._channels
+
+
+class _FakeClient:
+    def __init__(self, guild: _FakeGuild) -> None:
+        self._guild = guild
+
+    async def fetch_guild(self, _gid: int) -> _FakeGuild:
+        return self._guild
+
+
+class _FakeSeam:
+    def __init__(self, guild: _FakeGuild) -> None:
+        self._guild = guild
+
+    def run(self, action):
+        return asyncio.run(action(_FakeClient(self._guild)))
+
+
+def test_active_scan_ranks_and_serializes(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+
+    def msgs(author: str, *ages_days: int) -> list:
+        # oldest-first
+        return [
+            _FakeMsg(f"{author}{i}", author, f"hi {i}", now - timedelta(days=d))
+            for i, d in enumerate(ages_days)
+        ]
+
+    guild = _FakeGuild(
+        [
+            _FakeChannel("c1", "general", "text", True, msgs("ann", 3, 2, 1)),
+            _FakeChannel("c2", "busy", "text", True, msgs("bob", 5, 4, 3, 2, 1)),
+            _FakeChannel("c3", "quiet", "text", True, msgs("eve", 60)),  # stale
+            _FakeChannel("c4", "secret", "text", False, msgs("x", 1)),  # private
+            _FakeChannel("c5", "lounge", "voice", True, msgs("y", 1)),  # not text
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.active_scan(123, since_days=30, fetch_limit=5, top=0, preview=2)
+
+    # Private + voice excluded; the three public text channels are probed.
+    assert result["probed_text_channels"] == 3
+    # 'quiet' is stale (>30d) so it drops out of the ranked rows.
+    names = [c["name"] for c in result["channels"]]
+    assert names == ["busy", "general"]  # busy (5 msgs) outranks general (3)
+    assert "quiet" not in names
+    assert "secret" not in names
+
+    busy = result["channels"][0]
+    assert busy["msgs_in_window"] == 5
+    assert busy["saturated"] is True  # hit fetch_limit
+    general = result["channels"][1]
+    assert general["msgs_in_window"] == 3
+    assert general["saturated"] is False
+
+    # Preview entries must be plain dicts (the regression: objects leaking out).
+    assert len(general["preview"]) == 2
+    assert set(general["preview"][0]) == {"author", "content", "created_at"}
+    assert general["preview"][-1]["author"] == "ann"
+
+
+def test_active_scan_empty_when_no_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime.now(timezone.utc)
+    guild = _FakeGuild(
+        [
+            _FakeChannel(
+                "c1",
+                "stale",
+                "text",
+                True,
+                [_FakeMsg("m0", "ann", "old", now - timedelta(days=90))],
+            ),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    result = _discord.active_scan(123, since_days=30)
+    assert result["probed_text_channels"] == 1
+    assert result["active_channels"] == 0
+    assert result["channels"] == []

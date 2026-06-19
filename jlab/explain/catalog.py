@@ -131,7 +131,7 @@ active channels, and verifies connectivity. Public channels only by default
 
 - `jetson-ai-lab-cli discord channels [--all]` — list guild channels.
 - `jetson-ai-lab-cli discord read <channel_id> [--limit N]` — read recent messages.
-- `jetson-ai-lab-cli discord active [--since D] [--limit N] [--top K] [--preview P]` — rank active channels.
+- `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 

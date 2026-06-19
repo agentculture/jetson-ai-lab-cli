@@ -9,11 +9,8 @@ Read-only only (no post/react/thread). Public channels only by default
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 
 from jlab.cli import _discord
-from jlab.cli._errors import CliError
 from jlab.cli._output import emit_diagnostic, emit_result
 
 

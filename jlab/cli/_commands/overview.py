@@ -30,6 +30,7 @@ _VERBS = [
     "explain <path> — markdown docs for a topic",
     "overview — this descriptive snapshot",
     "doctor — check the agent-identity invariants",
+    "discord — read-only, public-only scan of the Jetson AI Lab Discord",
 ]
 
 
