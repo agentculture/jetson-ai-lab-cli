@@ -27,6 +27,11 @@ buildable/deployable package baseline. Clone it, rename the package, edit
 - `jetson-ai-lab-cli doctor` — check the agent-identity invariants.
 - `jetson-ai-lab-cli cli overview` — describe the CLI surface.
 
+## Discord (read-only)
+
+- `jetson-ai-lab-cli discord channels|read|active|doctor` — read-only,
+  public-only scan of the Jetson AI Lab Discord.
+
 ## Exit-code policy
 
 - `0` success
@@ -115,6 +120,91 @@ itself (distinct from the global `overview`, which describes the agent).
     jetson-ai-lab-cli cli overview --json
 """
 
+_DISCORD = """\
+# jetson-ai-lab-cli discord
+
+Read-only Discord noun group. Lists public channels, reads messages, ranks
+active channels, and verifies connectivity. Public channels only by default
+(`--all` is the sole private opt-in).
+
+## Verbs
+
+- `jetson-ai-lab-cli discord channels [--all]` — list guild channels.
+- `jetson-ai-lab-cli discord read <channel_id> [--limit N]` — read recent messages.
+- `jetson-ai-lab-cli discord active [--since D] [--limit N] [--top K] [--preview P]` — rank active channels.
+- `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
+- `jetson-ai-lab-cli discord overview` — describe this noun group.
+
+## Conventions
+
+- Read-only only (no post/react/thread).
+- Public channels only by default (`--all` is the sole private opt-in).
+- Every command supports `--json`.
+- Results to stdout, diagnostics/errors to stderr.
+"""
+
+_DISCORD_CHANNELS = """\
+# jetson-ai-lab-cli discord channels
+
+List the guild's channels with a ``public`` flag. By default only public
+channels (those the ``@everyone`` role can view) are returned. Pass ``--all``
+to include private/role-gated channels too.
+
+## Usage
+
+    jetson-ai-lab-cli discord channels
+    jetson-ai-lab-cli discord channels --all
+    jetson-ai-lab-cli discord channels --json
+"""
+
+_DISCORD_READ = """\
+# jetson-ai-lab-cli discord read <channel_id>
+
+Read recent messages from a single channel. *limit* must be 1-100 (default 20).
+
+## Usage
+
+    jetson-ai-lab-cli discord read 1234567890
+    jetson-ai-lab-cli discord read 1234567890 --limit 50
+    jetson-ai-lab-cli discord read 1234567890 --json
+"""
+
+_DISCORD_ACTIVE = """\
+# jetson-ai-lab-cli discord active
+
+Rank active public text channels by recent traffic. Probes all public text
+channels in a single REST session (``asyncio.gather``), then ranks in-process.
+
+## Usage
+
+    jetson-ai-lab-cli discord active
+    jetson-ai-lab-cli discord active --since 7 --top 10 --preview 3
+    jetson-ai-lab-cli discord active --json
+"""
+
+_DISCORD_DOCTOR = """\
+# jetson-ai-lab-cli discord doctor
+
+Verify the Discord bot token is set, ``discord-bot-cli`` is importable, and
+the guild is readable. Exits 2 on environment error.
+
+## Usage
+
+    jetson-ai-lab-cli discord doctor
+    jetson-ai-lab-cli discord doctor --json
+"""
+
+_DISCORD_OVERVIEW = """\
+# jetson-ai-lab-cli discord overview
+
+Describe the ``discord`` noun group: verbs, conventions, and constraints.
+
+## Usage
+
+    jetson-ai-lab-cli discord overview
+    jetson-ai-lab-cli discord overview --json
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -129,4 +219,10 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("doctor",): _DOCTOR,
     ("cli",): _CLI,
     ("cli", "overview"): _CLI,
+    ("discord",): _DISCORD,
+    ("discord", "channels"): _DISCORD_CHANNELS,
+    ("discord", "read"): _DISCORD_READ,
+    ("discord", "active"): _DISCORD_ACTIVE,
+    ("discord", "doctor"): _DISCORD_DOCTOR,
+    ("discord", "overview"): _DISCORD_OVERVIEW,
 }

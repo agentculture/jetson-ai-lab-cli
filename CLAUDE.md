@@ -176,9 +176,10 @@ new surface must keep these true, or the build fails:
 
 ## Conventions
 
-- **Zero runtime dependencies.** Keep `dependencies = []`. If the Discord/index
-  work needs libraries, that's a deliberate decision to discuss — don't quietly
-  add deps to the runtime package.
+- **Zero runtime dependencies.** Keep `dependencies = []`. **Exception:**
+  `discord-bot-cli` is an AgentCulture-sibling optional `[discord]` extra
+  (lazy-imported; core install stays `deps=[]`). Any other library needs are a
+  deliberate decision to discuss — don't quietly add deps to the runtime package.
 - **`from __future__ import annotations`** at the top of every module.
 - **Cite-don't-import skills.** Most of `.claude/skills/` is vendored from
   **guildmaster** (with three skills originating in **devague**). Provenance +
