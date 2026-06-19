@@ -1,0 +1,286 @@
+{
+  "slug": "jetson-ai-lab-cli-now-reads-the-jetson-ai-lab-disc",
+  "title": "jetson-ai-lab-cli now reads the Jetson AI Lab Discord directly from the CLI: a 'jlab discord' noun group (channels / read / active) makes the read-only, public-only scan a first-class agent-first command instead of a helper skill script \u2014 with no new runtime dependencies.",
+  "schema_version": 1,
+  "status": "exported",
+  "created": "2026-06-19T05:35:29Z",
+  "updated": "2026-06-19T05:55:42Z",
+  "claims": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "jetson-ai-lab-cli now reads the Jetson AI Lab Discord directly from the CLI: a 'jlab discord' noun group (channels / read / active) makes the read-only, public-only scan a first-class agent-first command instead of a helper skill script \u2014 with no new runtime dependencies.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h5",
+          "text": "After shipping, an agent can do the whole read workflow (list public channels, read one channel, rank active channels) via 'jlab discord ...' alone, without invoking the jetson-discord-scan skill.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c2",
+      "kind": "audience",
+      "text": "The jetson-ai-lab-cli agent itself (its Claude backend invoking jlab verbs) and operators/maintainers running jlab by hand; both currently reach the Discord only through the jetson-discord-scan skill's scan.sh.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h6",
+          "text": "Both the Claude backend and a hand operator can run the verbs with only DISCORD_BOT_TOKEN set and a reachable discord-bot-cli \u2014 no extra setup beyond what scan.sh already needs.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c3",
+      "kind": "before_state",
+      "text": "Discord read access lives ONLY in the jetson-discord-scan skill (bash scan.sh + channels.py). It is invokable as a skill but is not part of the jlab CLI surface: no 'jlab' verb reads Discord, it is not in the explain catalog, has no --json/error contract enforced by the rubric, and is not covered by pytest.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h7",
+          "text": "grep of jlab/ for 'discord' today returns nothing \u2014 Discord read access genuinely exists only in .claude/skills/.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c4",
+      "kind": "after_state",
+      "text": "The same read-only/public-only capability is reachable as 'jlab discord channels|read|active' (plus 'jlab discord overview'), honoring the agent-first rubric (--json everywhere, error:/hint: contract, explain entries, stdout/stderr split) and covered by tests \u2014 while scan.sh either remains as a thin shim delegating to the CLI or is retired.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h1",
+          "text": "'uv run jlab discord active --json' produces JSON equivalent to scan.sh active (same ranking, same fields: id/name/last_post/msgs_in_window/saturated/preview) and 'jlab discord channels' never includes private channels unless --all is passed.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c5",
+      "kind": "why_it_matters",
+      "text": "The agent's intended job (read -> index -> answer) should be driven through ONE machine-parseable CLI, not split between a CLI and a side-channel bash skill. Folding read into jlab is the first step that makes the pipeline a real CLI and lets later index/answer verbs build on the same dispatch/error/output contracts.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h8",
+          "text": "The discord module follows the standard register()/cmd_* + _output/_errors recipe, so later index/answer verbs reuse the same dispatch/error/output contracts.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c6",
+      "kind": "boundary",
+      "text": "Scope is READ only: channels/read/active. No write path (post/react/thread) is ever added \u2014 the read-only and public-only-by-default constraints are preserved verbatim. NOT in scope: indexing, question-answering, caching/storage of message content, or any change to discord-bot-cli itself.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h4",
+          "text": "Code review confirms the discord command module exposes no post/react/thread call and public-only is the default in every path; --all is the only private opt-in.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c7",
+      "kind": "success_signal",
+      "text": "'uv run jlab discord active --json' returns the same ranked public-channel JSON scan.sh produces; 'teken cli doctor . --strict' still passes (every new path has --json, explain entry, error:/hint:, stdout/stderr split); pytest covers the new verbs; private channels never leak into default output.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h9",
+          "text": "Each acceptance check (active --json parity with scan.sh, teken strict pass, pytest coverage of the verbs, no private-channel leak) is concretely runnable as a gate, not aspirational.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c8",
+      "kind": "non_goal",
+      "text": "Not changing the four-names situation (jlab script / jetson-ai-lab dist / jlab package / jetson-ai-lab-cli prog) as part of this work, and not modifying or forking discord-bot-cli.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c9",
+      "kind": "requirement",
+      "text": "jlab discord must preserve the skill's operational contract verbatim: token via DISCORD_BOT_TOKEN env (never a flag), guild via JLAB_GUILD_ID (default 1326246312072581160), discord-bot-cli resolution via DISCORD_BOT_CLI / DISCORD_BOT_CLI_PROJECT / default ~/git/discord-bot-cli venv, and exit codes 0/1/2.",
+      "origin": "llm",
+      "status": "rejected",
+      "honesty_conditions": [
+        {
+          "id": "h2",
+          "text": "A test asserts no Discord secret or private-channel name is required in source/tests; the env-var names and exit codes match the skill exactly so existing operators' env keeps working.",
+          "status": "rejected"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c10",
+      "kind": "decision",
+      "text": "Dependency strategy: jlab discord SUBPROCESSES the same discord-bot-cli invocation scan.sh resolves (and runs a channels.py-equivalent for the public flag the same way), so it never imports discord_bot_cli and the runtime package keeps dependencies = []. Alternative considered: declare discord-bot-cli an optional [discord] extra and lazy-import it.",
+      "origin": "llm",
+      "status": "rejected",
+      "honesty_conditions": [
+        {
+          "id": "h3",
+          "text": "After folding in, 'grep dependencies pyproject.toml' still shows dependencies = [] and importing jlab.cli without discord-bot-cli installed does not raise.",
+          "status": "rejected"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c11",
+      "kind": "assumption",
+      "text": "discord-bot-cli (with its [discord] extra) is reachable from a sibling checkout at runtime; when it is not, jlab discord fails as an environment error (exit 2) with an error:/hint:, exactly as scan.sh's doctor does \u2014 the core 'jlab' CLI without Discord still works with zero deps.",
+      "origin": "llm",
+      "status": "rejected",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c12",
+      "kind": "decision",
+      "text": "Dependency: declare discord-bot-cli (with its [discord] extra) as a real runtime dependency \u2014 an AgentCulture sibling, so the strict deps=[] rule is intentionally relaxed for it (user-approved). jlab discord imports discord_bot_cli.discord_client and reads channels + messages through that one transport seam: no subprocess, no bash, channels.py logic moves into jlab. discord_bot_cli is lazy-imported inside the discord handler so core verbs (whoami/learn/explain/doctor) still import cleanly.",
+      "origin": "llm",
+      "status": "rejected",
+      "honesty_conditions": [
+        {
+          "id": "h10",
+          "text": "After the change, 'uv run jlab whoami' still works in an env where discord_bot_cli import would fail at module load (lazy import proven), and 'jlab discord active' reads via the imported seam with no subprocess to discord-bot-cli.",
+          "status": "rejected"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c13",
+      "kind": "requirement",
+      "text": "jlab discord preserves the skill's operational contract: token via DISCORD_BOT_TOKEN env only (never a flag), guild via JLAB_GUILD_ID (default 1326246312072581160), and exit codes 0 ok / 1 user-input / 2 environment (missing token, absent extra, unreadable guild).",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h11",
+          "text": "A test asserts no Discord secret or private-channel name is needed in source/tests, env names (DISCORD_BOT_TOKEN/JLAB_GUILD_ID) and exit codes 0/1/2 match the skill exactly.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c14",
+      "kind": "assumption",
+      "text": "Adding discord-bot-cli as a dependency is acceptable per the user's ruling that AgentCulture-internal deps are fine; CLAUDE.md's 'zero runtime dependencies' line will be updated to record this exception rather than silently violated.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h12",
+          "text": "pyproject.toml lists discord-bot-cli under dependencies (or its [discord] extra) and CLAUDE.md's Conventions section is updated to note the AgentCulture-dep exception.",
+          "status": "confirmed"
+        }
+      ],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c15",
+      "kind": "decision",
+      "text": "Dependency (refined per colleague review): discord-bot-cli is an OPTIONAL [discord] extra in pyproject ([project.optional-dependencies] discord = [\"discord-bot-cli[discord]\"]), NOT a hard dep \u2014 so jlab core keeps dependencies = [] literally and whoami/learn/explain/doctor install+import with zero deps. The discord handlers lazy-import discord_bot_cli; an absent extra raises CliError(code=2) with an install hint (uv pip install 'jetson-ai-lab[discord]'), never an ImportError traceback. This makes the announcement 'no new runtime dependencies' honest for the core install.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c16",
+      "kind": "decision",
+      "text": "All coupling to discord-bot-cli's internal API (discord_client.run / parse_id / require_token, and their CliError type) is isolated in ONE adapter module jlab/cli/_discord.py, which lazy-imports the extra and translates discord_bot_cli CliError -> jlab CliError. The discord command module imports only this adapter, so an upstream API change touches one file.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c17",
+      "kind": "decision",
+      "text": "active fold preserves+improves parallelism: instead of xargs subprocess-per-channel, a single discord_client.run(action) opens one REST session and asyncio.gather()s the per-public-text-channel history reads, then ranks in-process. Same ~20s scale, fewer logins, no temp files.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c18",
+      "kind": "decision",
+      "text": "Resolve v2: add 'jlab discord doctor' as its own verb (token present + discord-bot-cli importable + guild readable), mirroring scan.sh doctor; it does NOT fold into the top-level jlab doctor.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    },
+    {
+      "id": "c19",
+      "kind": "decision",
+      "text": "Resolve v1 per user: DROP the committed data/channels.json snapshot and never commit pulled Discord data. The verbs pull fresh live data to understand trends; the tool persists no channel maps, summaries, or history into the repo. Reinforces the existing boundary (no caching/storage of message content).",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": []
+    }
+  ],
+  "open_vagueness": [
+    {
+      "id": "v1",
+      "text": "Whether the committed data/channels.json snapshot moves into the package (jlab/ data) or stays under the skill dir once the skill is shimmed/retired.",
+      "kind": "unknown_nonblocking",
+      "claim_id": null
+    },
+    {
+      "id": "v2",
+      "text": "Whether 'jlab discord doctor' should exist as its own verb or fold into the existing top-level 'jlab doctor'.",
+      "kind": "unknown_nonblocking",
+      "claim_id": null
+    }
+  ]
+}
