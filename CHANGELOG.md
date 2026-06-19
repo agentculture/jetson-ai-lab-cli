@@ -11,6 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - jetson-discord-scan skill — read-only shallow scan of the Jetson AI Lab Discord (public channels only). Lists public channels, reads a channel's recent messages, and ranks public text channels by last-30-day traffic, wrapping the sibling discord-bot-cli read verbs. scripts/channels.py reuses discord_bot_cli.discord_client.run() as a library to add a public/private flag the stock channel list omits.
 - data/channels.json — committed public-only channel-map snapshot of the Jetson AI Lab Discord (118 public channels).
+- docs/jetson-ai-lab-server.svg — an at-a-glance concept map of what the Jetson AI Lab community is about (hardware, workloads, tooling, robotics, community), embedded in the README. Drawn from the read-only scan.
 
 ### Changed
 

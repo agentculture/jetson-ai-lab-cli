@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <style>
+      .card  { fill:#ffffff; stroke:#d0d7de; stroke-width:1.5; rx:14; }
+      .bar   { fill:#76b900; rx:14; }
+      .ctitle{ fill:#ffffff; font-size:17px; font-weight:700; }
+      .bul   { fill:#24292f; font-size:14px; }
+      .lead  { fill:#57606a; font-size:13px; font-weight:600; }
+      .link  { stroke:#9aa7b1; stroke-width:2.5; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="900" fill="#f6f8fa"/>
+
+  <!-- title -->
+  <text x="640" y="42" text-anchor="middle" fill="#1a1a1a" font-size="26" font-weight="800">Jetson AI Lab Research Group — what the server is about</text>
+  <text x="640" y="66" text-anchor="middle" fill="#57606a" font-size="14">A hands-on community running modern AI on NVIDIA edge hardware · ~120 public channels</text>
+
+  <!-- connectors (drawn first, hub on top) -->
+  <line class="link" x1="640" y1="450" x2="215" y2="185"/>
+  <line class="link" x1="640" y1="450" x2="1065" y2="185"/>
+  <line class="link" x1="640" y1="450" x2="215" y2="450"/>
+  <line class="link" x1="640" y1="450" x2="1065" y2="450"/>
+  <line class="link" x1="640" y1="450" x2="215" y2="720"/>
+  <line class="link" x1="640" y1="450" x2="1065" y2="720"/>
+
+  <!-- ===== TL: HARDWARE ===== -->
+  <g>
+    <rect class="card" x="40" y="95" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="40" y="95" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="40" y="112" width="350" height="17"/>
+    <text class="ctitle" x="60" y="118">🔧  HARDWARE PLATFORMS</text>
+    <text class="bul" x="60" y="156">• Jetson Orin — Nano / NX / AGX</text>
+    <text class="bul" x="60" y="182">• Jetson Thor (no RT cores)</text>
+    <text class="bul" x="60" y="208">• DGX Spark / GB10 (Blackwell desktop)</text>
+    <text class="bul" x="60" y="234">• Carrier boards · cameras · LiDAR</text>
+    <text class="lead" x="60" y="260">the iron everyone is targeting</text>
+  </g>
+
+  <!-- ===== TR: WHAT MEMBERS DO ===== -->
+  <g>
+    <rect class="card" x="890" y="95" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="890" y="95" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="890" y="112" width="350" height="17"/>
+    <text class="ctitle" x="910" y="118">⚙️  WHAT MEMBERS DO</text>
+    <text class="bul" x="910" y="156">• Benchmark (tok/s, GB/s)</text>
+    <text class="bul" x="910" y="182">• Share working container recipes</text>
+    <text class="bul" x="910" y="208">• Troubleshoot OOM &amp; driver bugs</text>
+    <text class="bul" x="910" y="234">• Optimize inference / SSD streaming</text>
+    <text class="lead" x="910" y="260">quantize models for the edge</text>
+  </g>
+
+  <!-- ===== ML: WORKLOADS ===== -->
+  <g>
+    <rect class="card" x="40" y="360" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="40" y="360" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="40" y="377" width="350" height="17"/>
+    <text class="ctitle" x="60" y="383">🧠  WORKLOADS THEY RUN</text>
+    <text class="bul" x="60" y="421">• LLMs — Qwen 3.6, Gemma 4, MiniMax-M3</text>
+    <text class="bul" x="60" y="447">• VLMs / multimodal</text>
+    <text class="bul" x="60" y="473">• VLAs — Pi0, GR00T, smolvla</text>
+    <text class="bul" x="60" y="499">• Speech — ASR / TTS / S2S</text>
+    <text class="lead" x="60" y="525">+ on-device agents</text>
+  </g>
+
+  <!-- ===== MR: PHYSICAL AI ===== -->
+  <g>
+    <rect class="card" x="890" y="360" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="890" y="360" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="890" y="377" width="350" height="17"/>
+    <text class="ctitle" x="910" y="383">🤖  PHYSICAL AI / ROBOTICS</text>
+    <text class="bul" x="910" y="421">• Sim-to-real (Isaac Sim / Lab)</text>
+    <text class="bul" x="910" y="447">• Robot arms (LeRobot SO-101)</text>
+    <text class="bul" x="910" y="473">• Drones · humanoids · RL</text>
+    <text class="bul" x="910" y="499">• Real-time VLA inference (FlashRT)</text>
+    <text class="lead" x="910" y="525">the fastest-growing edge</text>
+  </g>
+
+  <!-- ===== BL: SOFTWARE & TOOLING ===== -->
+  <g>
+    <rect class="card" x="40" y="630" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="40" y="630" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="40" y="647" width="350" height="17"/>
+    <text class="ctitle" x="60" y="653">📦  SOFTWARE &amp; TOOLING</text>
+    <text class="bul" x="60" y="691">• JetPack 7.2  →  CUDA SBSA</text>
+    <text class="bul" x="60" y="717">• vLLM · SGLang · llama.cpp</text>
+    <text class="bul" x="60" y="743">• jetson-containers · TensorRT</text>
+    <text class="bul" x="60" y="769">• Isaac Sim / ROS / Lab / GR00T</text>
+    <text class="lead" x="60" y="795">quant: NVFP4 · FP8</text>
+  </g>
+
+  <!-- ===== BR: COMMUNITY & CADENCE ===== -->
+  <g>
+    <rect class="card" x="890" y="630" width="350" height="180" rx="14"/>
+    <rect class="bar"  x="890" y="630" width="350" height="34" rx="14"/>
+    <rect class="bar"  x="890" y="647" width="350" height="17"/>
+    <text class="ctitle" x="910" y="653">🌐  COMMUNITY &amp; CADENCE</text>
+    <text class="bul" x="910" y="691">• Monthly research meeting (2nd Tue)</text>
+    <text class="bul" x="910" y="717">• Live talks + speaker pipeline</text>
+    <text class="bul" x="910" y="743">• NVIDIA presence (tutorials, JP)</text>
+    <text class="bul" x="910" y="769">• #bot-news daily AI digest</text>
+    <text class="lead" x="910" y="795">jobs · intros · news feeds</text>
+  </g>
+
+  <!-- ===== HUB (drawn last, on top) ===== -->
+  <g>
+    <rect x="470" y="378" width="340" height="144" rx="18" fill="#1a1a1a" stroke="#76b900" stroke-width="3"/>
+    <text x="640" y="420" text-anchor="middle" fill="#76b900" font-size="20" font-weight="800">JETSON AI LAB</text>
+    <text x="640" y="446" text-anchor="middle" fill="#ffffff" font-size="14">Run LLMs · VLMs · robotics</text>
+    <text x="640" y="468" text-anchor="middle" fill="#ffffff" font-size="14">on NVIDIA edge hardware</text>
+    <text x="640" y="498" text-anchor="middle" fill="#9aa7b1" font-size="12">edge AI · on-device · sim-to-real</text>
+  </g>
+
+  <!-- footer -->
+  <text x="640" y="868" text-anchor="middle" fill="#8b949e" font-size="12">Drawn from a read-only scan · 46 channels active in the last 30 days · 2026-06-19</text>
+</svg>

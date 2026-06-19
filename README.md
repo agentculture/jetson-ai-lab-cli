@@ -47,7 +47,11 @@ error, `3+` reserved.
 
 ## Jetson AI Lab Discord (read-only)
 
-The agent's intended job starts at the **Jetson AI Lab Research Group** Discord.
+The agent's intended job starts at the **Jetson AI Lab Research Group** Discord —
+a hands-on community running modern AI on NVIDIA edge hardware. At a glance:
+
+![Concept map of the Jetson AI Lab Research Group: a central hub "run LLMs, VLMs and robotics on NVIDIA edge hardware" surrounded by six branches — hardware platforms (Orin, Thor, DGX Spark), workloads (LLMs, VLMs, VLAs, speech, agents), software and tooling (JetPack 7.2/CUDA SBSA, vLLM/SGLang, jetson-containers, Isaac), what members do (benchmark, share container recipes, troubleshoot, quantize), physical AI and robotics (sim-to-real, robot arms, drones, VLA inference), and community and cadence (monthly meeting, talks, NVIDIA presence, news feeds).](docs/jetson-ai-lab-server.svg)
+
 The [`jetson-discord-scan`](.claude/skills/jetson-discord-scan/SKILL.md) skill
 gives it a **read-only** window into that server. It wraps the read verbs of the
 sibling [`discord-bot-cli`](https://github.com/agentculture/discord-bot-cli) —
