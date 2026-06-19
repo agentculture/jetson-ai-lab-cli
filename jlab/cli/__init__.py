@@ -88,6 +88,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _overview_cmd.register(sub)
     _doctor_cmd.register(sub)
     _cli_group.register(sub)
+    from jlab.cli._commands import discord as _discord_group
+
+    _discord_group.register(sub)
     # Register your own noun groups here:
     #   from jlab.cli._commands import my_noun as _my_noun_group
     #   _my_noun_group.register(sub)

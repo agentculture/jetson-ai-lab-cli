@@ -1,6 +1,6 @@
 [project]
 name = "jetson-ai-lab"
-version = "0.3.0"
+version = "0.4.0"
 description = "Discord-facing knowledge fetch & index agent for the Jetson AI Lab community — fetches and indexes Jetson AI Lab docs/sources and answers members' questions on Discord."
 readme = "README.md"
 license = "MIT"
@@ -21,6 +21,9 @@ Issues = "https://github.com/agentculture/jetson-ai-lab-cli/issues"
 
 [project.scripts]
 jlab = "jlab.cli:main"
+
+[project.optional-dependencies]
+discord = ["discord-bot-cli[discord]"]
 
 [build-system]
 requires = ["hatchling"]

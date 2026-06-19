@@ -21,3 +21,9 @@ ignores:
   - ".teken/**"
   # Vendored skills are cited verbatim from guildmaster — do not reformat them.
   - ".claude/skills/**"
+  # devague-generated artifacts — their layout is dictated by the frame, not by
+  # markdown style (titles are verbatim announcements, bodies quote code tokens).
+  - "docs/specs/**"
+  - "docs/reviews/**"
+  # devague working state (gitignored; never reaches CI).
+  - ".devague/**"
