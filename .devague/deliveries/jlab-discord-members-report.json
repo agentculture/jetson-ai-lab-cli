@@ -2,7 +2,7 @@
   "plan_slug": "jlab-discord-members-report",
   "schema_version": 2,
   "created": "2026-09-04T16:27:31Z",
-  "updated": "2026-09-04T16:35:41Z",
+  "updated": "2026-09-04T16:53:45Z",
   "deviations": [
     {
       "id": "d1",
@@ -33,7 +33,296 @@
       "seq": 2
     }
   ],
-  "evidence": [],
-  "deltas": [],
+  "evidence": [
+    {
+      "id": "e1",
+      "obligation_ref": "o1",
+      "test_ref": "tests/test_members_invariants.py::test_private_channel_contributes_nothing_to_member_statistics",
+      "behavior_text": "A private channel whose history() raises AssertionError if called is never fetched; its name and authors are absent from scan_window and aggregate output",
+      "contract_text": "Public channels only \u2014 private participation must never reach a member's statistics",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "The fake private channel's history() raises if invoked, so the test can only pass because the fetch never happens \u2014 it would fail if filtering moved after the fetch",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 3
+    },
+    {
+      "id": "e2",
+      "obligation_ref": "o2",
+      "test_ref": "tests/test_members_invariants.py::test_no_discord_write_calls_anywhere_in_members_code_paths",
+      "behavior_text": "Call-shaped regex over _discord.py, jlab/members/*.py and _commands/discord.py finds no send/edit/delete/add_reaction/create_thread call",
+      "contract_text": "Read-only \u2014 no write path is added anywhere on the members path",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "Guard-the-guard tests pin both true-positive detection and false-positive avoidance, so the regex cannot silently rot",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 4
+    },
+    {
+      "id": "e3",
+      "obligation_ref": "o3",
+      "test_ref": "tests/test_members_paths.py::test_gitignore_covers_the_members_report_path",
+      "behavior_text": "git check-ignore exits 0 for a path under data/reports/members/",
+      "contract_text": "Report output is gitignored and never committed",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "Test shells out to real git check-ignore against the real .gitignore; also verified manually on the live 786KB report",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 5
+    },
+    {
+      "id": "e4",
+      "obligation_ref": "o5",
+      "test_ref": "tests/test_members_aggregate.py::test_no_username_anywhere_in_output",
+      "behavior_text": "Sentinel username, display name and content strings, and the field names name/display_name/content/preview, are all absent from json.dumps(aggregate(...))",
+      "contract_text": "The scan and aggregation stages are anonymous: author.id only, never a username",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "Planted sentinel values would surface in the serialized output if anonymity regressed; independently re-verified by the integrator with fresh sentinels",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 6
+    },
+    {
+      "id": "e5",
+      "obligation_ref": "o7",
+      "test_ref": "tests/test_discord.py::test_probe_channel_direct_reports_failed_status + ::test_probe_channel_empty_channel_is_ok_not_failed",
+      "behavior_text": "A channel whose history() raises returns status 'failed'; an empty channel returns status 'ok' with message_count 0",
+      "contract_text": "A channel that FAILS to read must be distinguishable from a channel with no messages",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "The two tests pin both sides of the distinction; collapsing them back to the old empty-list swallow fails the first",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 7
+    },
+    {
+      "id": "e6",
+      "obligation_ref": "o10",
+      "test_ref": "tests/test_members_report.py::test_hostile_display_name_renders_as_literal_text + ::test_escaping_covers_attribute_context",
+      "behavior_text": "A display name of <script>alert(1)</script>\"><img src=x onerror=alert(2)> renders escaped; no <script tag appears; attribute context escaped with quote=True",
+      "contract_text": "Member display names are attacker-controlled and must be HTML-escaped where the report renders them",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "Hostile payload asserted absent AND escaped forms asserted present, so dropping escaping fails loudly; integrator re-verified independently against a fresh payload",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 8
+    },
+    {
+      "id": "e7",
+      "obligation_ref": "o11",
+      "test_ref": "tests/test_members_cli.py::test_discord_members_json_is_id_only",
+      "behavior_text": "resolve_authors and write_report are monkeypatched to raise if called; --json runs clean and its stdout JSON contains no display_name or username",
+      "contract_text": "--json output is id-only so person-level names cannot leave via stdout redirection",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "The stubs raise on call, so any future wiring of name resolution into the --json path fails the test immediately",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 9
+    },
+    {
+      "id": "e8",
+      "obligation_ref": "o13",
+      "test_ref": "tests/test_members_resolve.py::test_departed_excluded_by_default_but_counted_in_totals",
+      "behavior_text": "Departed authors (NotFound from fetch_member) are excluded from included_author_ids by default, still counted in total_authors, and reported as excluded_departed_count",
+      "contract_text": "Authors who left the guild are excluded by default and the excluded count is reported; a flag includes them",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "Unit test with fake guild objects; ALSO confirmed on live data \u2014 the real 90-day run reported 'Authors omitted because they are no longer in the guild: 30'",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:00+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 10
+    },
+    {
+      "id": "e9",
+      "obligation_ref": "o4",
+      "test_ref": "tests/test_discord.py::test_scan_window_excludes_bots_via_author_bot + ::test_author_serialization_carries_bot_and_display_name",
+      "behavior_text": "scan_window(exclude_bots=True) drops authors whose author.bot is True; the serialized author carries the authoritative bot flag",
+      "contract_text": "Bot exclusion reads the authoritative author.bot flag; no username pattern-matching anywhere",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "Unit tests with fake author objects assert the flag drives exclusion; integrator grepped _serialize_author and found no name heuristic",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:25+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 11
+    },
+    {
+      "id": "e10",
+      "obligation_ref": "o6",
+      "test_ref": "tests/test_discord.py::test_active_scan_bounds_channel_fan_out + ::test_scan_window_bounds_channel_fan_out",
+      "behavior_text": "Both scan entry points bound in-flight channel reads by an asyncio.Semaphore; peak concurrency never exceeds the configured bound",
+      "contract_text": "Every channel fan-out is bounded by an asyncio.Semaphore; no unbounded gather remains",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "Tests observe peak concurrent entries against the bound; integrator separately grepped both gather sites and confirmed each is semaphore-guarded, and measured a live 100-channel run at concurrency 4",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:25+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 12
+    },
+    {
+      "id": "e11",
+      "obligation_ref": "o8",
+      "test_ref": "tests/test_members_aggregate.py::test_no_message_content_in_output + ::test_substance_computed_from_length_not_content",
+      "behavior_text": "No message content reaches the aggregate; substance is derived from message length only",
+      "contract_text": "Message CONTENT never leaves the aggregation stage \u2014 only lengths and counts survive",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "Sentinel content strings are asserted absent from the serialized aggregate, so any leak of text surfaces immediately",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:25+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 13
+    },
+    {
+      "id": "e12",
+      "obligation_ref": "o9",
+      "test_ref": "tests/test_members_paths.py::test_resolution_ignores_cwd + ::test_refuses_to_write_when_no_repo_root_is_found",
+      "behavior_text": "The report path resolves identically from an unrelated CWD, and raises CliError(2) rather than writing when no repo root exists",
+      "contract_text": "The report path resolves from the repo root regardless of CWD, and refuses when no repo root exists",
+      "evidence_type": "automated",
+      "strength": "sensitivity",
+      "strength_basis": "Integrator independently ran both from /tmp: path unchanged, and a broken repo marker produced CliError code=2 rather than a fallback write",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:25+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 14
+    },
+    {
+      "id": "e13",
+      "obligation_ref": "o12",
+      "test_ref": "tests/test_cli.py::test_every_catalog_path_resolves + 'uv run teken cli doctor . --strict'",
+      "behavior_text": "The ('discord','members') explain path resolves and the seven-bundle agent-first rubric passes with the new verb registered",
+      "contract_text": "explain resolves ('discord','members') and teken cli doctor --strict passes",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "pytest green and teken --strict exit 0 at the named commit, re-run by the integrator after the final merge",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T19:53:25+03:00",
+        "commit": "34b5f84"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 15
+    }
+  ],
+  "deltas": [
+    {
+      "id": "b1",
+      "kind": "added",
+      "behavior_text": "The already-shipped 'jlab discord active' verb gained a --concurrency flag (default 4) and its fan-out is now semaphore-bounded. This changes a verb that existed before this plan; its output shape is unchanged and its pinned shape tests pass untouched.",
+      "caused_by": [
+        "c17"
+      ],
+      "evidence_refs": [
+        "e10"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b2",
+      "kind": "added",
+      "behavior_text": "tests/test_discord.py::test_seam_missing_extra_raises_env_error now SIMULATES the absent [discord] extra via a None entry in sys.modules instead of inheriting absence from the environment. Installing the extra (h10) made the old environment-dependent test fail; the new form asserts the missing-extra contract either way.",
+      "caused_by": [
+        "c14"
+      ],
+      "evidence_refs": [],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b3",
+      "kind": "added",
+      "behavior_text": "The rendered report orders rows ALPHABETICALLY by label rather than by any signal value, with visible text stating the ordering is presentation and not a recommendation. This is stricter than c6/h15 required: a value-sorted table would read as a ranking even with a disclaimer attached.",
+      "caused_by": [
+        "c6"
+      ],
+      "evidence_refs": [
+        "e6"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    }
+  ],
   "supersessions": []
 }
