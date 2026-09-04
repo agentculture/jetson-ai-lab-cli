@@ -69,8 +69,43 @@ bash $S read <channel_id> --limit 50        # recent messages of one channel
 
 Needs a **read-scoped** bot token in `DISCORD_BOT_TOKEN` and `discord-bot-cli`
 with its `[discord]` extra. Results are JSON on stdout; errors/diagnostics on
-stderr. A committed public-only channel-map snapshot lives at
-[`data/channels.json`](.claude/skills/jetson-discord-scan/data/channels.json).
+stderr.
+
+### Member participation statistics (`jlab discord members`)
+
+```bash
+jlab discord members                  # last 90 days, public text channels
+jlab discord members --since 30       # narrower window
+jlab discord members --json           # same statistics, id-only, on stdout
+```
+
+This scans the same public text channels and writes an HTML report — message
+counts, breadth across channels, thread/question starts, and length-based
+substance signals per participant — to a fixed path inside this repo, printing
+that path when it's done.
+
+**Expect it to take about five minutes.** Measured against the Jetson AI Lab
+guild (100 public text channels, 90-day window): ~15s to scan and page the
+channels, then ~4m45s to resolve author ids to names — one `fetch_member` call
+per distinct author, 869 of them, at ~330ms each. Name resolution is ~95% of
+the runtime; a batch resolution verb is filed upstream as
+[`agentculture/discord-bot-cli#14`](https://github.com/agentculture/discord-bot-cli/issues/14)
+and would cut the run to well under a minute. `--since 30` is proportionally
+faster because it finds fewer distinct authors. **It issues no verdict:** the CLI does not rank,
+score, or label anyone "most active," and it produces no presenter shortlist —
+it organizes statistics so a Channel Maintainer (or an agent) can read the
+report and make that judgment themselves.
+
+The pipeline is anonymous end to end until the very last step: messages are
+aggregated by `author.id` only, message content never survives past the
+aggregation stage (only lengths and counts do), and display names are resolved
+from ids in one batch, solely to render the report — `--json` output stays
+id-only. Bots and webhooks are excluded; members who have left the guild are
+excluded by default (a flag can include everyone). Voice channels are
+deliberately out of scope — a member who only attends voice sessions won't show
+up in this report — and forum channels/threads are a possible follow-up, not
+covered yet. The generated report is **gitignored and never committed**; it's a
+local artifact you hand to a maintainer, not a checked-in file.
 
 ## Make it your own
 

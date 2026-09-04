@@ -25,5 +25,11 @@ ignores:
   # markdown style (titles are verbatim announcements, bodies quote code tokens).
   - "docs/specs/**"
   - "docs/reviews/**"
+  - "docs/plans/**"
+  - "docs/deliveries/**"
   # devague working state (gitignored; never reaches CI).
   - ".devague/**"
+  # The uv venv: third-party packages ship their own READMEs/LICENSEs, which are
+  # not this repo's markdown. Installing the [discord] extra pulled in packages
+  # whose .md files the CI glob "**/*.md" would otherwise lint and fail on.
+  - ".venv/**"
