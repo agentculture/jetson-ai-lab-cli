@@ -48,12 +48,12 @@ Quoted verbatim from the `devague summary` skeleton:
 
 ## Mid-work Decisions
 
-- `d1` (proposed) — `t3` could not compute "thread starts" or "reply counts":
+- `d1` (approved) — `t3` could not compute "thread starts" or "reply counts":
   the serialized message carries no reply-to or thread-parent field. The agent
   implemented the closest data-backed proxy (content ending in `?`) and named
   it `question_starts` rather than `thread_starts` **to avoid overclaiming**,
   and did not fabricate a reply-count field.
-- `d2` (proposed) — `t4` initially passed the `c14`/`h23` isolation guard by
+- `d2` (approved) — `t4` initially passed the `c14`/`h23` isolation guard by
   splitting a string literal, `getattr(member, "global" + "_name", None)`,
   which hides the usage from the guard rather than resolving it. Fixed at merge
   by un-obfuscating the access and narrowing the over-broad guard with a
@@ -110,7 +110,8 @@ Quoted verbatim from the `devague summary` skeleton:
   **0.0053s** · resolve **286.09s** (869 authors, 329.2ms each, 0 errors) ·
   total **301.66s** · resolve = **94.8%** of wall-clock
 - devague ledger: obligations `o1`–`o14`, evidence `e1`–`e14` (all `pass`),
-  deltas `b1`–`b4`, deviations `d1`–`d2`, lapse `l1` (approved)
+  deltas `b1`–`b6`, deviations `d1`–`d2` (approved), lapse `l1` (approved) —
+  the whole ledger is adjudicated; nothing is left proposed
 - upstream: `agentculture/discord-bot-cli#14`
 
 ## Delivery Claims
@@ -143,10 +144,11 @@ Quoted verbatim from the `devague summary` skeleton:
 - **`t3` — decide on thread/reply signals (`d1`).** Delivering real thread starts
   or reply counts means serializing reply-to/thread-parent references in
   `jlab/cli/_discord.py`. Deferred deliberately, not forgotten.
-- **Adjudicate the ledger.** `d1`, `d2`, `o1`–`o13`, `e1`–`e13`, `b1`–`b3` are all
-  `proposed`. Two further deltas **could not be filed at all**: the CLI refused
-  them because they cite `d1`/`d2`, and only an approved deviation is real
-  provenance. Approving `d1`/`d2` unblocks them.
+- **Ledger adjudicated.** `d1`, `d2`, `o1`–`o14`, `e1`–`e14`, `b1`–`b6` are all
+  approved. The two deltas the CLI had refused — `b5` (the `question_starts`
+  substitution) and `b6` (the guard exemption) — cite `d1`/`d2` and were filed
+  once those deviations were approved, since only an approved deviation is real
+  provenance.
 - **Batch id resolution upstream (`discord-bot-cli#14`).** Measured: 869 sequential
   `fetch_member` calls are **94.8% of wall-clock** (286.09s of 301.66s). When it
   ships, drop the local workarounds in `jlab/cli/_discord.py` and the per-id loop

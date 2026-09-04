@@ -2,7 +2,7 @@
   "plan_slug": "jlab-discord-members-report",
   "schema_version": 2,
   "created": "2026-09-04T16:27:31Z",
-  "updated": "2026-09-04T18:04:13Z",
+  "updated": "2026-09-04T18:39:28Z",
   "deviations": [
     {
       "id": "d1",
@@ -14,7 +14,7 @@
         "c6"
       ],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "classification": null,
       "seq": 1
     },
@@ -28,7 +28,7 @@
         "c28"
       ],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "classification": null,
       "seq": 2
     }
@@ -49,7 +49,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 3
     },
@@ -68,7 +68,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 4
     },
@@ -87,7 +87,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 5
     },
@@ -106,7 +106,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 6
     },
@@ -125,7 +125,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 7
     },
@@ -144,7 +144,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 8
     },
@@ -163,7 +163,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 9
     },
@@ -182,7 +182,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 10
     },
@@ -201,7 +201,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 11
     },
@@ -220,7 +220,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 12
     },
@@ -239,7 +239,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 13
     },
@@ -258,7 +258,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 14
     },
@@ -277,7 +277,7 @@
         "commit": "34b5f84"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 15
     },
@@ -296,7 +296,7 @@
         "commit": "d6e8f07"
       },
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false,
       "seq": 16
     }
@@ -313,7 +313,7 @@
         "e10"
       ],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false
     },
     {
@@ -325,7 +325,7 @@
       ],
       "evidence_refs": [],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false
     },
     {
@@ -339,7 +339,7 @@
         "e6"
       ],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
       "superseded": false
     },
     {
@@ -353,7 +353,35 @@
         "e14"
       ],
       "origin": "llm",
-      "status": "proposed",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b5",
+      "kind": "amended",
+      "behavior_text": "The delivered signal set is message_count, distinct_channels, question_starts and substance{total_length,avg_length}. 'Thread starts' and 'reply counts' from the plan are NOT delivered: the serialized message carries no reply-to or thread-parent field, so neither is computable. The '?'-suffix proxy is named question_starts rather than thread_starts to avoid overclaiming.",
+      "caused_by": [
+        "d1"
+      ],
+      "evidence_refs": [
+        "e4"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b6",
+      "kind": "amended",
+      "behavior_text": "The c14/h23 isolation guard (tests/test_discord.py::test_upstream_workaround_is_isolated_to_the_adapter) now exempts jlab/members/resolve.py, which reads Member.global_name off a guild.fetch_member result \u2014 a different seam from the message-serialization workaround discord-bot-cli#14 replaces. Previously the only way to pass was to split the string literal, hiding the usage from the guard.",
+      "caused_by": [
+        "d2"
+      ],
+      "evidence_refs": [
+        "e13"
+      ],
+      "origin": "llm",
+      "status": "approved",
       "superseded": false
     }
   ],
