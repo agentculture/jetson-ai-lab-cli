@@ -217,15 +217,24 @@ _DISCORD_MEMBERS = """\
 # jetson-ai-lab-cli discord members
 
 Scan public text channels for participation statistics over a time window and
-write an HTML report. Organizes statistics by member without ranking or verdict.
-The pipeline is anonymous: aggregates activity by author ID and resolves names
-only at render time. Bots and members who have left the guild are excluded by
-default; public text channels only.
+write an HTML report — one invocation, no pipeline to assemble. Organizes
+statistics by member without ranking or verdict. The pipeline is anonymous:
+aggregates activity by author ID and resolves names only at render time.
+Bots and members who have left the guild are excluded by default; public
+text channels only.
+
+`--json` emits the id-only aggregate (no name resolution, no HTML file
+written) so display names can never leave via stdout redirection.
+`--include-departed` includes every author regardless of current guild
+membership; the default excludes those who have left. `--since` defaults to
+90 days; `--concurrency` bounds how many channels are read in parallel.
 
 ## Usage
 
     jetson-ai-lab-cli discord members
     jetson-ai-lab-cli discord members --since 30
+    jetson-ai-lab-cli discord members --include-departed
+    jetson-ai-lab-cli discord members --concurrency 2
     jetson-ai-lab-cli discord members --json
 """
 

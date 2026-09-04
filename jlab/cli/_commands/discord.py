@@ -1,9 +1,9 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, doctor, overview.
+Verbs: channels, read, active, members, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
-(--all is the sole private opt-in).
+(--all is the sole private opt-in for channel visibility).
 """
 
 from __future__ import annotations
@@ -12,6 +12,9 @@ import argparse
 
 from jlab.cli import _discord
 from jlab.cli._output import emit_diagnostic, emit_result
+from jlab.members import aggregate as _aggregate_mod
+from jlab.members import report as _report_mod
+from jlab.members import resolve as _resolve_mod
 
 _JSON_HELP = "Emit structured JSON."
 
@@ -112,6 +115,73 @@ def cmd_discord_active(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- members ------------------------------------------------------------
+
+
+def cmd_discord_members(args: argparse.Namespace) -> int:
+    """Scan, aggregate, and (for humans) render an id-only members report.
+
+    ``--json`` emits the **aggregate** stage only — id-only statistics, no
+    name resolution — and returns before ``resolve_authors`` is ever called.
+    That is the whole privacy design: the rendered HTML report is contained
+    by a repo-anchored, gitignored path (see ``jlab/members/paths.py``), but
+    stdout redirection is not containable, so resolved display names must
+    never be reachable via ``--json``. Do not "helpfully" attach a resolved
+    mapping to the JSON payload.
+
+    The text-mode path is the one-invocation pipeline: scan window ->
+    aggregate -> resolve names -> render + write the HTML report, printing
+    only the path written. ``--include-departed`` includes every author
+    regardless of current guild membership; by default authors who have left
+    the guild are excluded from the rendered report (still counted in the
+    scan/aggregate stage).
+    """
+    guild_id = _discord._guild_id()
+    since_days = int(getattr(args, "since", _discord.DEFAULT_WINDOW_DAYS))
+    concurrency = int(getattr(args, "concurrency", _discord.DEFAULT_CONCURRENCY))
+    include_departed = bool(getattr(args, "include_departed", False))
+    json_mode = bool(getattr(args, "json", False))
+
+    emit_diagnostic(
+        f"scanning public text channels for the last {since_days} days "
+        f"(concurrency {concurrency}) ..."
+    )
+    scan_result = _discord.scan_window(
+        guild_id,
+        since_days=since_days,
+        concurrency=concurrency,
+    )
+
+    agg = _aggregate_mod.aggregate(scan_result)
+
+    if json_mode:
+        # id-only: stop here, never touch resolve_authors.
+        emit_result(agg, json_mode=True)
+        return 0
+
+    emit_diagnostic(f"resolving {len(agg['members'])} author id(s) to names ...")
+    stats_by_author_id = {member["author_id"]: member for member in agg["members"]}
+    resolve_result = _resolve_mod.resolve_authors(
+        guild_id,
+        stats_by_author_id,
+        include_departed=include_departed,
+    )
+    resolved = {aid: r.to_dict() for aid, r in resolve_result.resolved.items()}
+
+    included_ids = set(resolve_result.included_author_ids)
+    rendered_members = [m for m in agg["members"] if m["author_id"] in included_ids]
+    render_agg = dict(agg, members=rendered_members)
+    excluded_count = None if include_departed else resolve_result.departed_count
+
+    path = _report_mod.write_report(
+        render_agg,
+        resolved=resolved,
+        excluded_count=excluded_count,
+    )
+    emit_result(str(path), json_mode=False)
+    return 0
+
+
 # -- doctor -----------------------------------------------------------------
 
 
@@ -140,6 +210,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "read <channel_id> [--limit N] — read recent messages from a channel",
                 "active [--since D] [--limit N] [--top K] [--preview P] "
                 "[--concurrency C] — rank active channels",
+                "members [--since D] [--concurrency C] [--include-departed] "
+                "[--json] — scan + write an id-only members HTML report",
                 "doctor — verify token + guild readable",
                 "overview — describe this noun group",
             ],
@@ -239,6 +311,44 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     ac.add_argument("--json", action="store_true", help=_JSON_HELP)
     ac.set_defaults(func=cmd_discord_active, json=False)
+
+    # members
+    mm = noun_sub.add_parser(
+        "members",
+        help="Scan participation and write an id-only members HTML report.",
+    )
+    mm.add_argument(
+        "--since",
+        type=int,
+        default=_discord.DEFAULT_WINDOW_DAYS,
+        help=f"Days to look back (default {_discord.DEFAULT_WINDOW_DAYS}).",
+    )
+    mm.add_argument(
+        "--concurrency",
+        type=int,
+        default=_discord.DEFAULT_CONCURRENCY,
+        help=(
+            "Channels read concurrently "
+            f"(default {_discord.DEFAULT_CONCURRENCY}; keeps Discord rate limits happy)."
+        ),
+    )
+    mm.add_argument(
+        "--include-departed",
+        action="store_true",
+        help=(
+            "Include every author regardless of current guild membership "
+            "(default excludes authors who have left the guild)."
+        ),
+    )
+    mm.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            f"{_JSON_HELP} Emits the id-only aggregate (no name resolution, "
+            "no HTML report written)."
+        ),
+    )
+    mm.set_defaults(func=cmd_discord_members, json=False, include_departed=False)
 
     # doctor
     dr = noun_sub.add_parser(
