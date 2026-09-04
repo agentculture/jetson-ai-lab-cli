@@ -82,7 +82,16 @@ jlab discord members --json           # same statistics, id-only, on stdout
 This scans the same public text channels and writes an HTML report — message
 counts, breadth across channels, thread/question starts, and length-based
 substance signals per participant — to a fixed path inside this repo, printing
-that path when it's done. **It issues no verdict:** the CLI does not rank,
+that path when it's done.
+
+**Expect it to take about five minutes.** Measured against the Jetson AI Lab
+guild (100 public text channels, 90-day window): ~15s to scan and page the
+channels, then ~4m45s to resolve author ids to names — one `fetch_member` call
+per distinct author, 869 of them, at ~330ms each. Name resolution is ~95% of
+the runtime; a batch resolution verb is filed upstream as
+[`agentculture/discord-bot-cli#14`](https://github.com/agentculture/discord-bot-cli/issues/14)
+and would cut the run to well under a minute. `--since 30` is proportionally
+faster because it finds fewer distinct authors. **It issues no verdict:** the CLI does not rank,
 score, or label anyone "most active," and it produces no presenter shortlist —
 it organizes statistics so a Channel Maintainer (or an agent) can read the
 report and make that judgment themselves.

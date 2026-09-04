@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-04T15:09:43Z",
-  "updated": "2026-09-04T16:27:12Z",
+  "updated": "2026-09-04T18:03:58Z",
   "claims": [
     {
       "id": "c1",
@@ -1045,6 +1045,15 @@
       "seam": "jlab/members/resolve.py",
       "behavior": "Authors who left the guild are excluded by default and the excluded count is reported; a flag includes them",
       "source_text": "Authors who have left the guild are excluded from the report by default, with an explicit flag to include every author regardless of current membership. The membership check uses guild.fetch_member (verified working under the existing read-only token) and runs inside the same batched translation session as name resolution, so it costs no extra pass. Departed authors are counted in coverage totals but omitted from the member statistics, and the report states how many were excluded.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o14",
+      "claim_id": "c15",
+      "seam": "README.md members section + a measured full-window run",
+      "behavior": "A full-window run completes in a time a maintainer will wait for, AND that runtime is documented up front rather than discovered by running it",
+      "source_text": "API cost is approved: the members scan may page ~100 public text channels across the full time window without cost-driven truncation. Default window 90 days, overridable via --since.",
       "origin": "llm",
       "status": "proposed"
     }

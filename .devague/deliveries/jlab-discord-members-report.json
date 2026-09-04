@@ -2,7 +2,7 @@
   "plan_slug": "jlab-discord-members-report",
   "schema_version": 2,
   "created": "2026-09-04T16:27:31Z",
-  "updated": "2026-09-04T16:53:45Z",
+  "updated": "2026-09-04T18:04:13Z",
   "deviations": [
     {
       "id": "d1",
@@ -280,6 +280,25 @@
       "status": "proposed",
       "superseded": false,
       "seq": 15
+    },
+    {
+      "id": "e14",
+      "obligation_ref": "o14",
+      "test_ref": "instrumented full-window run: scratchpad/measure.py against guild 1326246312072581160",
+      "behavior_text": "90-day run over 100/100 public text channels: scan 15.56s, aggregate 0.0053s, resolve 286.09s (869 authors, 329.2ms each, 0 errors), total 301.66s \u2014 resolve is 94.8% of wall-clock. Runtime now stated in README.md before a user runs it.",
+      "contract_text": "A full-window run completes in a time a maintainer will actually wait for, and its runtime is stated up front rather than discovered",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "Single instrumented live run at the named commit with per-phase timers. ONE sample, one guild, one network \u2014 not a distribution, so execution and not sensitivity. The contract's second half (runtime stated up front) was UNMET until this commit added it to README.md.",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-04T21:04:13+03:00",
+        "commit": "d6e8f07"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 16
     }
   ],
   "deltas": [
@@ -318,6 +337,20 @@
       ],
       "evidence_refs": [
         "e6"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b4",
+      "kind": "added",
+      "behavior_text": "README.md now states the expected runtime (~5 minutes) with the per-phase breakdown and names the upstream batch-resolution issue as the cause. h24 required the runtime be stated up front rather than discovered; before this it was documented nowhere and only discoverable by running the command.",
+      "caused_by": [
+        "h24"
+      ],
+      "evidence_refs": [
+        "e14"
       ],
       "origin": "llm",
       "status": "proposed",

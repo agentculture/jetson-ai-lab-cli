@@ -70,9 +70,19 @@ Quoted verbatim from the `devague summary` skeleton:
   verdict words, so the disclaimer cannot smuggle them back in. This caught a
   real leak: CSS `margin-top` contains "top".
 - `t12`'s live run exposed a scaling fact the spec did not anticipate: **869
-  distinct authors**, each needing its own `fetch_member` REST call. That is the
-  bottleneck (~4 of the run's 5 minutes) and is exactly the batch-resolution ask
-  filed upstream as `agentculture/discord-bot-cli#14`.
+  distinct authors**, each needing its own `fetch_member` REST call. A follow-up
+  instrumented run measured the split precisely — scan **15.56s**, aggregate
+  **0.0053s**, resolve **286.09s** — so name resolution is **94.8% of wall-clock**
+  at 329.2ms per author, 0 errors. The channel paging that `c15` approved API
+  cost for and `c17` bounded with a semaphore costs 15 seconds; the entire
+  runtime is the one upstream verb missing from
+  `agentculture/discord-bot-cli#14`. (An earlier estimate in this document said
+  "~4 of the run's 5 minutes"; the measurement supersedes it.)
+- **`h24` was partly unmet and is now fixed.** The honesty condition requires the
+  runtime be "stated up front rather than discovered" — no document stated it
+  anywhere, so 5 minutes was discoverable only by running the command. README.md
+  now carries the expected runtime, the per-phase breakdown, and the upstream
+  issue as the cause.
 - Markdown lint config gained `.venv/**`, `docs/plans/**` and `docs/deliveries/**`
   ignores. `t9`'s extra pulled in packages whose bundled `.md` files the CI glob
   `"**/*.md"` would have linted and failed on.
@@ -96,8 +106,11 @@ Quoted verbatim from the `devague summary` skeleton:
 - commits: `e06355b..34b5f84` (14 first-parent)
 - live run: 90-day window, 100/100 public text channels read in full, 0 partial,
   0 failed, 3,014 messages, 839 members, **30 departed authors omitted**, 5m02s
-- devague ledger: obligations `o1`–`o13`, evidence `e1`–`e13` (all `pass`),
-  deltas `b1`–`b3`, deviations `d1`–`d2`, lapse `l1` (approved)
+- instrumented re-run (per-phase, same guild): scan **15.56s** · aggregate
+  **0.0053s** · resolve **286.09s** (869 authors, 329.2ms each, 0 errors) ·
+  total **301.66s** · resolve = **94.8%** of wall-clock
+- devague ledger: obligations `o1`–`o14`, evidence `e1`–`e14` (all `pass`),
+  deltas `b1`–`b4`, deviations `d1`–`d2`, lapse `l1` (approved)
 - upstream: `agentculture/discord-bot-cli#14`
 
 ## Delivery Claims
@@ -116,7 +129,8 @@ Quoted verbatim from the `devague summary` skeleton:
 | Departed authors excluded by default and the count reported | high | `tests/test_members_resolve.py::test_departed_excluded_by_default_but_counted_in_totals` (evidence `e13`) · live run reported 30 omitted |
 | Zero runtime dependencies preserved | high | `pyproject.toml` `dependencies = []` · report contains no `http://`/`https://` |
 | Coverage is at or above the CI gate | high | measured **95.74%**, gate 60 |
-| A full-window run completes in a time a maintainer will wait for | medium | measured 5m02s once, on one guild, one network — a single sample, not a distribution |
+| A full-window run completes in a time a maintainer will wait for, and that runtime is documented | medium | measured 301.66s with per-phase timers (evidence `e14`); documented in README.md. One sample, one guild, one network — not a distribution |
+| Name resolution, not channel paging, dominates the runtime | high | instrumented run: resolve 286.09s of 301.66s = 94.8% (evidence `e14`) |
 | The report surfaces presenter candidates maintainers had not considered | unverified | requires a real Channel Maintainer (`h14`/`h22`) — not claimed done |
 | Text authorship is a good proxy for presenter-suitability | unverified | `c22` confirmed as an assumption; `q4` resolved "no voice" as a scope decision, not as evidence the proxy works |
 
@@ -133,9 +147,16 @@ Quoted verbatim from the `devague summary` skeleton:
   `proposed`. Two further deltas **could not be filed at all**: the CLI refused
   them because they cite `d1`/`d2`, and only an approved deviation is real
   provenance. Approving `d1`/`d2` unblocks them.
-- **Batch id resolution upstream (`discord-bot-cli#14`).** 869 sequential
-  `fetch_member` calls dominate the runtime. When it ships, drop the local
-  workarounds in `jlab/cli/_discord.py` and the per-id loop in `resolve.py`.
+- **Batch id resolution upstream (`discord-bot-cli#14`).** Measured: 869 sequential
+  `fetch_member` calls are **94.8% of wall-clock** (286.09s of 301.66s). When it
+  ships, drop the local workarounds in `jlab/cli/_discord.py` and the per-id loop
+  in `resolve.py` — the run should fall to well under a minute. The measurement is
+  materially stronger evidence than the prediction the issue was filed with and is
+  worth posting there.
+- **No new deviation was needed after the fan-out.** `/deviate` was re-run and
+  assessed: the measurement is evidence, not a plan departure, and no task
+  diverged from its contract after `d1`/`d2`. Recording one anyway would have
+  violated the skill's rule against preemptive records.
 - **Voice participation stays out of scope.** Recorded decision (`q4`), not an
   oversight — members who only attend the voice sessions will not appear. Scope
   entry `s17` holds the measurement behind that trade-off.
