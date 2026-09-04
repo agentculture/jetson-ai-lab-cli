@@ -124,14 +124,15 @@ _DISCORD = """\
 # jetson-ai-lab-cli discord
 
 Read-only Discord noun group. Lists public channels, reads messages, ranks
-active channels, and verifies connectivity. Public channels only by default
-(`--all` is the sole private opt-in).
+active channels, scans participation statistics, and verifies connectivity.
+Public channels only by default (`--all` is the sole private opt-in).
 
 ## Verbs
 
 - `jetson-ai-lab-cli discord channels [--all]` — list guild channels.
 - `jetson-ai-lab-cli discord read <channel_id> [--limit N]` — read recent messages.
 - `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
+- `jetson-ai-lab-cli discord members [--since DAYS] [--json]` — scan participation statistics.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -205,6 +206,22 @@ Describe the ``discord`` noun group: verbs, conventions, and constraints.
     jetson-ai-lab-cli discord overview --json
 """
 
+_DISCORD_MEMBERS = """\
+# jetson-ai-lab-cli discord members
+
+Scan public text channels for participation statistics over a time window and
+write an HTML report. Organizes statistics by member without ranking or verdict.
+The pipeline is anonymous: aggregates activity by author ID and resolves names
+only at render time. Bots and members who have left the guild are excluded by
+default; public text channels only.
+
+## Usage
+
+    jetson-ai-lab-cli discord members
+    jetson-ai-lab-cli discord members --since 30
+    jetson-ai-lab-cli discord members --json
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -223,6 +240,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "channels"): _DISCORD_CHANNELS,
     ("discord", "read"): _DISCORD_READ,
     ("discord", "active"): _DISCORD_ACTIVE,
+    ("discord", "members"): _DISCORD_MEMBERS,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
 }
