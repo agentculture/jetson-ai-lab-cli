@@ -745,3 +745,153 @@ def test_active_scan_top_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
     result = _discord.active_scan(123, since_days=30, fetch_limit=10, top=1)
     assert [c["name"] for c in result["channels"]] == ["b"]  # only the top-1 most active
+
+
+# ---------------------------------------------------------------------------
+# _probe_channel — pin TODAY's behaviour directly (no stubbed active_scan).
+#
+# These tests drive `_probe_channel` straight, with a fake discord.py-shaped
+# channel object, instead of going through `active_scan` (which the tests
+# above either monkeypatch entirely — see test_discord_active_json at line
+# ~258 and test_discord_active_probing_goes_to_stderr at ~267 — or drive with
+# a fake *seam*/guild that never lets a caller see `_probe_channel`'s own
+# return value). A later task changes what `_probe_channel` does with a
+# failing `history()` call; these tests exist so that change shows up as a
+# diff here, not as a silent behaviour drift.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_channel_direct_swallows_history_exception() -> None:
+    """TODAY: a channel.history() failure is swallowed; messages come back empty.
+
+    This calls `_probe_channel` directly (not via `active_scan`/a stubbed
+    seam) so the assertion is about `_probe_channel`'s own contract, not
+    about how `active_scan` happens to aggregate its callees.
+    """
+
+    class _BoomChannel:
+        id = "c-boom"
+        name = "flaky"
+
+        def history(self, limit: int):
+            raise RuntimeError("cannot read history")
+
+    result = asyncio.run(_discord._probe_channel(_BoomChannel(), fetch_limit=5))
+
+    # Today's contract: the exception is swallowed and the channel still
+    # comes back as a well-formed row with an empty message list — it does
+    # NOT propagate the exception out of _probe_channel.
+    assert result == {"id": "c-boom", "name": "flaky", "messages": []}
+
+
+def test_probe_channel_direct_happy_path_serializes_messages() -> None:
+    """Sanity companion to the failure case: a healthy channel serializes fine."""
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c1",
+        "general",
+        "text",
+        True,
+        [_FakeMsg("m0", "ann", "hi", now - timedelta(days=1))],
+    )
+
+    result = asyncio.run(_discord._probe_channel(chan, fetch_limit=5))
+
+    assert result["id"] == "c1"
+    assert result["name"] == "general"
+    assert [m["author"] for m in result["messages"]] == ["ann"]
+    assert result["messages"][0]["content"] == "hi"
+
+
+def test_discord_active_output_shape_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the exact shape of `active_scan`'s return value.
+
+    A later task is expected to change `_probe_channel`'s contract (e.g. to
+    surface per-channel failures instead of silently returning an empty
+    message list). If that change also alters what `active_scan` returns —
+    new top-level keys, new per-channel row keys — this test should fail and
+    make that visible in the diff, rather than the shape drifting quietly.
+    """
+    now = datetime.now(timezone.utc)
+    guild = _FakeGuild(
+        [
+            _FakeChannel(
+                "c1",
+                "general",
+                "text",
+                True,
+                [_FakeMsg("m0", "ann", "hi", now - timedelta(days=1))],
+            ),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.active_scan(123, since_days=30, fetch_limit=5, top=0, preview=2)
+
+    assert set(result) == {
+        "guild_id",
+        "since_days",
+        "fetch_limit",
+        "probed_text_channels",
+        "active_channels",
+        "channels",
+    }
+    row = result["channels"][0]
+    assert set(row) == {
+        "id",
+        "name",
+        "last_post",
+        "msgs_in_window",
+        "saturated",
+        "preview",
+    }
+    preview_entry = row["preview"][0]
+    assert set(preview_entry) == {"author", "content", "created_at"}
+
+
+def test_active_scan_has_no_per_author_aggregation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Document a current gap: active_scan does not aggregate by author.
+
+    Several authors post in the same channel below. `active_scan`'s ranked
+    row only carries channel-level counters (`msgs_in_window`, `saturated`)
+    and a short raw `preview` — there is no per-person/author breakdown
+    (e.g. a message-count-per-author map, a "top poster", or a set of
+    distinct authors) anywhere in the result. This test exists to make that
+    gap visible; it should be revisited (not just re-asserted) if a future
+    task adds author aggregation to `active_scan`.
+    """
+    now = datetime.now(timezone.utc)
+    guild = _FakeGuild(
+        [
+            _FakeChannel(
+                "c1",
+                "general",
+                "text",
+                True,
+                [
+                    _FakeMsg("m0", "ann", "hi", now - timedelta(hours=3)),
+                    _FakeMsg("m1", "bob", "hey", now - timedelta(hours=2)),
+                    _FakeMsg("m2", "ann", "again", now - timedelta(hours=1)),
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.active_scan(123, since_days=30, fetch_limit=10, top=0, preview=10)
+
+    row = result["channels"][0]
+    # No aggregation keys of any kind — only channel-level counters + a raw
+    # preview list. The only place an author name shows up at all is inside
+    # each preview entry's "author" field (a copy of the raw message), never
+    # rolled up into counts or a distinct-author set.
+    aggregation_like_keys = {
+        "authors",
+        "author_counts",
+        "unique_authors",
+        "top_author",
+        "participants",
+        "per_author",
+    }
+    assert aggregation_like_keys.isdisjoint(row)
+    assert row["msgs_in_window"] == 3  # channel-level count only, not per-author
