@@ -47,11 +47,12 @@ Operational facts: the token lives in **`DISCORD_BOT_TOKEN`** (read from the env
 never a flag). `discord-bot-cli` needs its `[discord]` extra — the skill runs it
 from the sibling **`~/git/discord-bot-cli`** checkout's venv by default (override
 via `DISCORD_BOT_CLI_PROJECT` / `DISCORD_BOT_CLI`). `jlab discord active` ranks
-public text channels by last-30-day traffic (~100 channels in ~20s at `--par 8`).
+public text channels by last-30-day traffic (measured: 100 channels in ~13s at
+`--concurrency 4`, the default).
 
 **Doc-drift note:** `.claude/skills/jetson-discord-scan/scripts/scan.sh` is now a
 5-line stub — `exec uv run jlab discord "$@"` — pointing straight at the `jlab`
-CLI; it does not itself implement `active`'s `--par` ranking (that lives in
+CLI; it does not itself implement `active`'s ranking (that lives in
 `jlab/cli/_discord.py`). There is also no committed `data/channels.json` anywhere
 in this repo; a public-only channel map, if you want one, is whatever
 `jlab discord channels` prints on demand — nothing is checked in.
