@@ -1,0 +1,718 @@
+{
+  "slug": "jlab-discord-members-report",
+  "title": "jlab discord members report",
+  "frame_slug": "jlab-discord-members-report",
+  "schema_version": 5,
+  "status": "exported",
+  "created": "2026-09-04T15:45:43Z",
+  "updated": "2026-09-04T16:03:17Z",
+  "targets": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "jetson-ai-lab-cli can now generate a report of the most active members of the Jetson AI Lab Discord, so Channel Maintainers can expand outreach looking for presenters.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h1",
+      "kind": "honesty",
+      "text": "The report is generated from public channels only, verified by the same @everyone view_channel check list_channels() already uses \u2014 no private-channel message contributes to any member's statistics.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h2",
+      "kind": "honesty",
+      "text": "The scan actually covers a stated time window (e.g. last 30/90 days) rather than just the last N messages per channel \u2014 which requires adding 'after'-based pagination to read_messages(), since today's 1..100 cap silently truncates busy channels.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h3",
+      "kind": "honesty",
+      "text": "Bot and webhook authors are excluded, which requires serializing author.bot at the adapter seam \u2014 it is not serialized today.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h4",
+      "kind": "honesty",
+      "text": "The generated HTML opens and renders its diagrams in Chrome from the local filesystem, with no build step and no Python charting dependency added.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h5",
+      "kind": "honesty",
+      "text": "The report output path is gitignored, so running the command cannot accidentally commit person-level data.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h6",
+      "kind": "honesty",
+      "text": "The word 'report' does not imply a verdict: the output presents statistics and diagrams, and nowhere labels a person as 'most active' or recommends them as a presenter.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h9",
+      "kind": "honesty",
+      "text": "The intermediate scan/aggregation data contains no usernames \u2014 only author ids \u2014 so an unrendered run leaks no identities.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h10",
+      "kind": "honesty",
+      "text": "jlab's own venv has the [discord] extra installed, so 'uv run jlab discord doctor' exits 0 (not today's exit 2) and the members verb runs from this repo rather than only from the sibling checkout.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c2",
+      "kind": "audience",
+      "text": "Jetson AI Lab Discord Channel Maintainers, who need to find community members worth approaching as presenters \u2014 plus the humans and agents who read the generated report to do that judging.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h11",
+      "kind": "honesty",
+      "text": "The report is actually usable by a Channel Maintainer without reading Python or JSON \u2014 it opens in Chrome and reads as statistics, not as a data dump.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c3",
+      "kind": "before_state",
+      "text": "Maintainers have no view of who is active. 'jlab discord active' ranks channels by traffic but never touches author identity, so there is no way to see which PEOPLE are participating. Finding presenter candidates means scrolling Discord by hand across ~100 public channels.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h12",
+      "kind": "honesty",
+      "text": "'jlab discord active' genuinely offers no per-person view today \u2014 verified: it aggregates msgs_in_window per channel and never reads author identity.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c4",
+      "kind": "after_state",
+      "text": "A maintainer runs one jlab command and gets a gitignored HTML report, openable in Chrome, containing overall statistics and diagrams about member participation in the guild's public channels \u2014 message counts, breadth across channels, thread/question starts, and substance signals \u2014 organized so a human or agent can read it and decide who to approach.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h13",
+      "kind": "honesty",
+      "text": "It is ONE command, not a pipeline the maintainer has to assemble: a single jlab invocation produces the finished HTML file.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c5",
+      "kind": "why_it_matters",
+      "text": "Presenter outreach is currently guesswork limited to whoever a maintainer already happens to notice. Organized participation statistics widen the candidate pool to people who are genuinely active but not already visible to the maintainers.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h14",
+      "kind": "honesty",
+      "text": "The report surfaces at least some active members who are NOT already known to the maintainers \u2014 otherwise it only confirms what they knew and widens nothing.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c6",
+      "kind": "boundary",
+      "text": "The CLI does NOT rank, score, judge, or recommend anyone. It emits no 'most active member' verdict and no presenter shortlist. It organizes statistics; humans and agents do the analysis.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h15",
+      "kind": "honesty",
+      "text": "No output field, column header, sort order, or diagram title implies a verdict \u2014 a default sort is presentation, not a recommendation, and must be labelled as such.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c7",
+      "kind": "boundary",
+      "text": "Public channels only. Per-member statistics are computed exclusively from channels the guild's @everyone role can view_channel; a private channel's participation must never reach a member's totals or the report.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h16",
+      "kind": "honesty",
+      "text": "Public-channel filtering happens BEFORE any message is read, not as a post-filter on collected data, so private content never enters the process at all.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c8",
+      "kind": "boundary",
+      "text": "Read-only. No post, react, thread-create, DM, or any other write path is added \u2014 the members report only reads history, consistent with the existing discord noun group.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h17",
+      "kind": "honesty",
+      "text": "The added code paths contain no Discord write call of any kind.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c9",
+      "kind": "boundary",
+      "text": "Report output is gitignored and never committed. No person-level aggregation enters git history.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h18",
+      "kind": "honesty",
+      "text": "The output path is in .gitignore BEFORE the first report is generated, so no run can ever stage person-level data.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c10",
+      "kind": "boundary",
+      "text": "Zero runtime dependencies stays true: no Python charting or templating library is added. Diagrams are hand-emitted SVG or a CDN-loaded JS chart lib inside the generated HTML.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h19",
+      "kind": "honesty",
+      "text": "pyproject.toml's 'dependencies = []' is unchanged by this ship, and the generated HTML renders its diagrams offline or from an allowed CDN without a build step.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c11",
+      "kind": "boundary",
+      "text": "Phase 1 covers public TEXT channels only, matching active_scan's existing type filter. Forum channels and threads are a follow-up slice, explicitly not promised in this ship.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h20",
+      "kind": "honesty",
+      "text": "The report states its own coverage \u2014 it says on its face that it covers text channels only, so a reader never mistakes it for whole-guild coverage.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c12",
+      "kind": "boundary",
+      "text": "Bots and webhooks are excluded from all statistics; only human authors are counted.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h21",
+      "kind": "honesty",
+      "text": "Bot exclusion uses the authoritative author.bot flag, not a name heuristic or a hand-maintained denylist.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c13",
+      "kind": "success_signal",
+      "text": "A Channel Maintainer opens the generated HTML in Chrome and, without opening Discord, can identify presenter candidates they had not previously considered \u2014 the report surfaces active members the maintainers were not already aware of.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h22",
+      "kind": "honesty",
+      "text": "The maintainers actually run it and say whether it surfaced anyone new \u2014 the signal is their feedback, not our assumption that it worked.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c14",
+      "kind": "requirement",
+      "text": "The seam work is DELEGATED upstream and is NOT a blocker: open a GitHub issue on agentculture/discord-bot-cli (via 'agtag issue post') requesting author.bot, a recognizable display name, and after/time-window pagination past the 100-message cap in channel.py::_message_dict and the messages verb, so their agent picks it up, PRs and releases it. Meanwhile jlab implements those three itself against the raw discord.py objects its action closures already hold (the documented scripts/channels.py library-reuse pattern), so jlab work proceeds in parallel and drops its local workaround once upstream ships. Separately, jlab installs the [discord] extra into its own venv so 'uv run jlab discord doctor' passes and the members verb is verifiable end-to-end from this repo.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h23",
+      "kind": "honesty",
+      "text": "jlab's local implementation is written so it can be REPLACED by the upstream fields when issue #14 ships, rather than becoming a permanent fork of the seam.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c15",
+      "kind": "requirement",
+      "text": "API cost is approved: the members scan may page ~100 public text channels across the full time window without cost-driven truncation. Default window 90 days, overridable via --since.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h8",
+      "kind": "honesty",
+      "text": "A channel whose full window could not be paged is reported as incomplete rather than silently truncated, so the statistics never overstate their own coverage.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h24",
+      "kind": "honesty",
+      "text": "A full-window run completes in a time a maintainer will actually wait for, and its runtime is stated up front rather than discovered.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c16",
+      "kind": "boundary",
+      "text": "The scan and aggregation stages are anonymous: they key on author.id only and never store or emit a username. Human-readable names enter only at the final batch translation step that renders the report.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h25",
+      "kind": "honesty",
+      "text": "Name resolution is a separate, final stage \u2014 the aggregation output can be inspected on its own and contains only ids.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c17",
+      "kind": "requirement",
+      "text": "The scan must bound its concurrency. active_scan() today does asyncio.gather over EVERY public text channel with no cap (jlab/cli/_discord.py:238) \u2014 104 channels in the live guild. Under c15's full-window paging each channel becomes many paginated requests, so an uncapped gather puts hundreds of requests in flight at once and will hit Discord rate limits. Bound in-flight channel reads (a semaphore) and handle 429 backoff explicitly.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h26",
+      "kind": "honesty",
+      "text": "A full-window run completes without hitting Discord rate limits, and if it is throttled it degrades gracefully rather than producing silently partial data.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c18",
+      "kind": "requirement",
+      "text": "A channel that FAILS to read must be distinguishable from a channel with no messages. _probe_channel() (jlab/cli/_discord.py:195-200) catches every exception and returns an empty message list, so a permissions error, a 429, or a transient failure silently contributes zero messages. Under a members report that understates real people's activity with no signal, and it directly contradicts h8's promise that incomplete coverage is reported rather than silently truncated.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h27",
+      "kind": "honesty",
+      "text": "The report distinguishes 'this channel had no activity' from 'this channel could not be read', and a reader can tell which happened.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c19",
+      "kind": "requirement",
+      "text": "The report must carry run metadata on its face: scan timestamp, window start/end, channels attempted, channels fully covered, channels that failed or were rate-limited. Without it h8 and h20 are unverifiable by the reader, and there is no way to tell a quiet month from a broken run.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h28",
+      "kind": "honesty",
+      "text": "Someone reading the report months later can tell when it was generated, what window it covers, and what it failed to cover \u2014 without re-running it.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c20",
+      "kind": "boundary",
+      "text": "Message CONTENT never leaves the aggregation stage. The 'substance' signal uses message LENGTH and reply counts \u2014 numeric derivatives \u2014 so no member's words are stored in intermediate data or quoted in the report. c16 protects usernames but says nothing about content; note active_scan's existing 'preview' field (jlab/cli/_discord.py:180) does carry verbatim content, and the members path must not inherit it.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h29",
+      "kind": "honesty",
+      "text": "No member's words appear anywhere in the intermediate data or the report \u2014 inspecting either shows only counts, lengths, and ids.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c21",
+      "kind": "requirement",
+      "text": "The report's output path is fixed inside this repository (and gitignored there), or the command refuses to write. c9/h18 rely on .gitignore for containment, but .gitignore only protects THIS repo \u2014 a default of the current working directory means running the verb from another checkout writes person-level data into a repo with no such ignore rule, silently defeating c9.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h30",
+      "kind": "honesty",
+      "text": "Running the verb from an unrelated directory cannot write person-level data outside this repo's ignored output path.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c23",
+      "kind": "requirement",
+      "text": "Member display names are attacker-controlled strings and must be HTML-escaped where the report renders them. A Discord username or global_name can contain markup; injecting it unescaped into the generated page is a script-injection vector in an artifact maintainers open in Chrome. Applies to any user-derived string reaching the HTML, not just names.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h31",
+      "kind": "honesty",
+      "text": "A member whose display name contains markup renders as literal text in the report, and executes nothing.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c24",
+      "kind": "requirement",
+      "text": "The --json output carries the same person-level data as the report and must be covered by the same containment rule as c21. c21 fixes the HTML report's path, but every jlab verb supports --json to stdout (rubric requirement), so 'jlab discord members --json > /some/other/repo/out.json' writes ranked, name-resolved member data anywhere the caller likes, entirely outside c9's gitignore and c21's fixed path. Either --json stays id-only (no name resolution), or it inherits the same containment and warning as the report.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h33",
+      "kind": "honesty",
+      "text": "A maintainer cannot obtain name-resolved member data outside the contained path without a deliberate, visible act.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c25",
+      "kind": "requirement",
+      "text": "c18's fix must not silently change the existing 'discord active' verb. _probe_channel (jlab/cli/_discord.py:189) is called from exactly one place \u2014 active_scan:238 \u2014 so replacing its bare-except-returns-empty behaviour with a per-channel status changes 'active' too. The existing tests cannot catch it: tests/test_discord.py stubs jlab.cli._discord.active_scan wholesale (lines 258, 285), so nothing exercises _probe_channel's actual contract. Either version the seam for the members path or update 'active' deliberately, with tests that reach _probe_channel.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h34",
+      "kind": "honesty",
+      "text": "After the change, 'jlab discord active' behaves as it did before, or its change is deliberate and covered by a test that actually exercises _probe_channel.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c26",
+      "kind": "requirement",
+      "text": "The members verb must register an explain-catalog entry at ('discord','members') and keep the discord noun's overview listing current. jlab/explain/catalog.py:222-227 registers one key per discord verb, and tests/test_cli.py::test_every_catalog_path_resolves asserts every registered path resolves \u2014 a new verb without a catalog entry fails CI, and 'teken cli doctor . --strict' enforces the same rubric rule.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h35",
+      "kind": "honesty",
+      "text": "'uv run teken cli doctor . --strict' and the full pytest suite both pass with the new verb registered.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c27",
+      "kind": "requirement",
+      "text": "The HTML rendering code must ship with tests that keep total coverage at or above the CI gate. pyproject.toml sets fail_under = 60 (line 52); an HTML+SVG renderer is a large block of mostly-string-building code, and adding it untested can drop the project under the gate and fail CI on an otherwise correct PR.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h36",
+      "kind": "honesty",
+      "text": "Coverage after the ship is at or above 60, measured \u2014 not assumed.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c28",
+      "kind": "requirement",
+      "text": "Authors who have left the guild are excluded from the report by default, with an explicit flag to include every author regardless of current membership. The membership check uses guild.fetch_member (verified working under the existing read-only token) and runs inside the same batched translation session as name resolution, so it costs no extra pass. Departed authors are counted in coverage totals but omitted from the member statistics, and the report states how many were excluded.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h37",
+      "kind": "honesty",
+      "text": "A maintainer is never handed an outreach candidate who has already left the guild, unless they explicitly asked to include everyone.",
+      "deferred": false,
+      "deferred_reason": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "summary": "Pin the CURRENT _probe_channel + active behaviour with direct tests (tests/test_discord.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A test calls _probe_channel directly (not via a stubbed active_scan) and asserts today's swallow-returns-empty behaviour",
+        "A test asserts 'discord active' output shape is unchanged, so a later contract change is visible in the diff",
+        "A test documents that active_scan exposes no per-person/author aggregation today"
+      ],
+      "deps": [],
+      "covers": [
+        "c25",
+        "h34",
+        "h12"
+      ],
+      "instruction": "Do NOT change _probe_channel here \u2014 this task only pins today's behaviour so t2's change is visible. Test _probe_channel directly with a fake channel object; do not go through the stubbed active_scan path that tests/test_discord.py:258,285 uses."
+    },
+    {
+      "id": "t2",
+      "summary": "Adapter: windowed paging, bounded concurrency, per-channel status, author.bot + ids (jlab/cli/_discord.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "history() pages with after=<cutoff> past the 100-message cap; a channel whose window cannot be fully paged is marked incomplete, never silently truncated",
+        "Channel fan-out is bounded by an asyncio.Semaphore with a conservative default flag; no unbounded gather remains",
+        "Each channel carries a status (ok/partial/failed + reason); a failed read is distinguishable from an empty channel",
+        "Author serialization includes bot and a display name; bots are excluded via author.bot, never a name heuristic",
+        "Public-channel filtering happens BEFORE any message fetch \u2014 a test asserts a private channel is never fetched",
+        "The local workaround is isolated in this one file so upstream discord-bot-cli#14 can replace it in a single-file change"
+      ],
+      "deps": [
+        "t1"
+      ],
+      "covers": [
+        "c7",
+        "c12",
+        "c14",
+        "c15",
+        "c17",
+        "c18",
+        "h1",
+        "h2",
+        "h3",
+        "h8",
+        "h16",
+        "h21",
+        "h23",
+        "h24",
+        "h26",
+        "h27"
+      ],
+      "instruction": "The single riskiest file in the ship. Land it AFTER t1's pins exist. Keep every local workaround (author.bot, display name, after-paging) isolated in jlab/cli/_discord.py so upstream discord-bot-cli#14 can replace it in one file. Do not widen the bare-except swallow to the members path \u2014 replace it with an explicit per-channel status."
+    },
+    {
+      "id": "t3",
+      "summary": "Aggregation stage \u2014 id-only statistics, content discarded (new jlab/members/aggregate.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Aggregates by author.id only; a test asserts no username appears anywhere in the aggregate output",
+        "Substance uses message LENGTH and reply counts computed at read time; a test asserts no message content reaches the aggregate",
+        "Emits all four signals side by side (count, distinct channels, thread/question starts, substance) with no combined score"
+      ],
+      "deps": [
+        "t2"
+      ],
+      "covers": [
+        "c16",
+        "c20",
+        "h9",
+        "h29"
+      ],
+      "instruction": "New file; do not edit jlab/cli/_discord.py (t2 owns it). Compute message length at read time and discard content immediately \u2014 never carry text through. Do NOT reuse _rank_channel's 'preview' field: it holds verbatim content and would leak members' words into the report."
+    },
+    {
+      "id": "t4",
+      "summary": "Batch id-to-name translation as a separate final stage (new jlab/members/resolve.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Resolution is a distinct stage: the aggregate can be dumped and inspected on its own and contains only ids",
+        "Resolves ids in batch within one client session, tolerant per id (an unresolvable id yields an error entry, not a failed batch)",
+        "Membership check runs in the SAME batched session as name resolution (guild.fetch_member), not a second pass",
+        "Display name prefers the per-guild nick, falling back to global_name then username",
+        "Authors who have left the guild are excluded by default; they still count toward coverage totals and the excluded count is reported"
+      ],
+      "deps": [
+        "t2"
+      ],
+      "covers": [
+        "h25",
+        "c28",
+        "h37"
+      ],
+      "instruction": "New file. One batched session does BOTH id->name resolution and the guild-membership check (guild.fetch_member \u2014 verified working under the read-only token, returns nick and joined_at). Prefer nick > global_name > username. Tolerate per-id failure; never fail the whole batch."
+    },
+    {
+      "id": "t5",
+      "summary": "HTML report renderer \u2014 diagrams, escaping, run metadata, no verdict (new jlab/members/report.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Renders in Chrome from the local filesystem with no build step; pyproject dependencies stay []",
+        "Every user-derived string is escaped with html.escape; a test with a hostile display name asserts it renders as literal text",
+        "Header carries run metadata: scan timestamp, window start/end, channels attempted/covered/failed",
+        "States its own coverage on its face (public text channels only) so it is not mistaken for whole-guild coverage",
+        "No field, column header, sort order, or diagram title implies a verdict; any default sort is labelled as presentation",
+        "Readable by a maintainer without reading Python or JSON"
+      ],
+      "deps": [
+        "t3"
+      ],
+      "covers": [
+        "c6",
+        "c10",
+        "c11",
+        "c13",
+        "c19",
+        "c23",
+        "h4",
+        "h6",
+        "h11",
+        "h15",
+        "h19",
+        "h20",
+        "h28",
+        "h31"
+      ],
+      "instruction": "New file, largest code block in the ship \u2014 write tests as you go or t12's coverage gate will fail. Stdlib only: html.escape for every user-derived string, hand-emitted SVG or a CDN chart lib in the page. Nothing may read as a verdict: no 'top', 'best', 'most active', or 'recommended' anywhere in the rendered output."
+    },
+    {
+      "id": "t6",
+      "summary": "Wire the 'members' verb into the discord noun group (jlab/cli/_commands/discord.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "ONE invocation produces the finished HTML and prints its path; no pipeline for the maintainer to assemble",
+        "--json stays id-only (no name resolution) so person-level names cannot leave via stdout redirection",
+        "--since flag with a 90-day default; results to stdout, diagnostics to stderr; failures raise CliError",
+        "A flag includes every author regardless of current guild membership; default excludes those who left"
+      ],
+      "deps": [
+        "t3",
+        "t4",
+        "t5"
+      ],
+      "covers": [
+        "c1",
+        "c4",
+        "c24",
+        "h13",
+        "h33"
+      ],
+      "instruction": "Follows the repo recipe in CLAUDE.md: register(sub) + cmd_* handler, --json flag, _output helpers, CliError on failure. --json MUST stay id-only \u2014 name resolution happens only on the render path, or c24's containment hole reopens via stdout redirection."
+    },
+    {
+      "id": "t7",
+      "summary": "Explain-catalog entry for ('discord','members') (jlab/explain/catalog.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "test_every_catalog_path_resolves passes with the new path registered",
+        "'uv run teken cli doctor . --strict' passes and the discord overview lists the new verb"
+      ],
+      "deps": [],
+      "covers": [
+        "c26",
+        "h35"
+      ],
+      "instruction": "Tiny but CI-gating: without the ('discord','members') catalog entry, test_every_catalog_path_resolves and 'teken cli doctor . --strict' both fail. Land it in the same commit as the verb."
+    },
+    {
+      "id": "t8",
+      "summary": "Containment: repo-anchored output path + .gitignore rule (new jlab/members/paths.py, .gitignore)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Output path resolves from the repo root by walking up from __file__ (as whoami.py locates culture.yaml), never from CWD",
+        "The ignore rule lands in .gitignore in the SAME commit, before any report can be generated; asserted with git check-ignore",
+        "Running from an unrelated directory refuses to write rather than writing person-level data outside the ignored path"
+      ],
+      "deps": [],
+      "covers": [
+        "c9",
+        "c21",
+        "h5",
+        "h18",
+        "h30"
+      ],
+      "instruction": "Resolve the output path by walking up from __file__ to the repo root \u2014 copy the pattern jlab/whoami.py uses to locate culture.yaml. Never use CWD. The .gitignore rule must land in the SAME commit, before any report can be generated."
+    },
+    {
+      "id": "t9",
+      "summary": "Install the [discord] extra into jlab's own venv so doctor passes (pyproject.toml / uv sync)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "'uv run jlab discord doctor' exits 0 from this repo, not the exit 2 it returns today",
+        "Core install stays deps=[]; the extra remains optional and lazy-imported"
+      ],
+      "deps": [],
+      "covers": [
+        "h10"
+      ],
+      "instruction": "Environment task, no product code. Core install must stay dependencies = []; the [discord] extra stays optional and lazy-imported. Success is 'uv run jlab discord doctor' exiting 0 from this repo."
+    },
+    {
+      "id": "t10",
+      "summary": "Document the members verb for maintainers (README.md, CLAUDE.md)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "README documents what the report shows and states plainly that the CLI organizes statistics and issues no verdict",
+        "CLAUDE.md's Domain section covers the members path; the stale data/channels.json and scan.sh descriptions are corrected"
+      ],
+      "deps": [],
+      "covers": [
+        "c2",
+        "c3",
+        "c5"
+      ],
+      "instruction": "Docs only. Correct the two known CLAUDE.md drifts while here: data/channels.json does not exist in the repo, and scan.sh is now a 5-line stub pointing at the jlab CLI (not the --par 8 shell implementation described). State plainly that the CLI organizes statistics and issues no verdict."
+    },
+    {
+      "id": "t11",
+      "summary": "Invariant guard tests: read-only and public-only (new tests/test_members_invariants.py)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A test greps the members code paths and asserts no send/edit/delete/add_reaction/create_thread call exists",
+        "A test asserts a private (non-@everyone-viewable) channel contributes nothing to any member's statistics"
+      ],
+      "deps": [
+        "t6"
+      ],
+      "covers": [
+        "c8",
+        "h17"
+      ],
+      "instruction": "Guard tests only, no product code. These encode the two load-bearing invariants from CLAUDE.md \u2014 read-only and public-only \u2014 so a future change that breaks either fails CI rather than shipping."
+    },
+    {
+      "id": "t12",
+      "summary": "Measure the gates and hand one real run to maintainers (CI + validation)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "'uv run pytest -n auto --cov=jlab --cov-report=term' reports coverage at or above 60 \u2014 the measured number is recorded, not assumed",
+        "A real full-window run over the guild's public text channels completes; its wall-clock time is measured and recorded",
+        "One generated report is handed to a Channel Maintainer, and their feedback on whether it surfaced anyone new is recorded before any measurable success target is set"
+      ],
+      "deps": [
+        "t5",
+        "t6",
+        "t7",
+        "t8",
+        "t9",
+        "t10",
+        "t11"
+      ],
+      "covers": [
+        "c27",
+        "h36",
+        "h14",
+        "h22"
+      ],
+      "instruction": "Final wave, measurement not implementation. Record the ACTUAL coverage number and the ACTUAL wall-clock of a full-window run \u2014 do not assume either. Do not set a measurable success target until a maintainer has seen a real report (h22)."
+    }
+  ],
+  "risks": [],
+  "obligations": []
+}

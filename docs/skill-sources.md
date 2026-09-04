@@ -30,6 +30,58 @@ is load-bearing, even where guildmaster's upstream copy omits it.
 | `think` | `../guildmaster/.claude/skills/think/` | **devague** (re-broadcast via guildmaster) | idea→spec leg of the devague workflow chain. Verbatim (already carried `type: command` at guildmaster). Origin/broadcast prose left verbatim. | 2026-05-26 (guildmaster 0.6.0) |
 | `spec-to-plan` | `../guildmaster/.claude/skills/spec-to-plan/` | **devague** (re-broadcast via guildmaster) | spec→plan leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
 | `assign-to-workforce` | `../guildmaster/.claude/skills/assign-to-workforce/` | **devague** (re-broadcast via guildmaster) | plan→parallel-implementation leg of the devague workflow chain. Verbatim (already carried `type: command`). | 2026-05-26 (guildmaster 0.6.0) |
+| `scope` | `../devague/.claude/skills/scope/` | **devague** (origin, cited directly) | idea→scope leg (leg 1 of 8). **Cited from devague, not guildmaster** — see "Supplier lag" below. Verbatim (already carried `type: command`). Guildmaster's copy also ships a `scripts/scope.sh` portability wrapper, omitted here: `devague` resolves on PATH in this repo, and the wrapper only forwards verbatim. | 2026-09-04 |
+| `challenge` | `../devague/.claude/skills/challenge/` | **devague** (origin, cited directly) | blind-spot discovery leg (leg 3 of 8), runs between `/think` and `/spec-to-plan`. **Cited from devague, not guildmaster** — see "Supplier lag". Verbatim. Wrapper `scripts/challenge.sh` omitted (as above). | 2026-09-04 |
+| `deviate` | `../devague/.claude/skills/deviate/` | **devague** (origin, cited directly) | mid-run divergence leg (leg 6 of 8). **Cited from devague, not guildmaster** — see "Supplier lag". Verbatim. Wrapper omitted (as above). | 2026-09-04 |
+| `validate-delivery` | `../devague/.claude/skills/validate-delivery/` | **devague** (origin, cited directly) | behavioral-validation leg (leg 7 of 8). **Not present in guildmaster at all** at sync time — devague is the only source. Verbatim. | 2026-09-04 |
+| `summarize-delivery` | `../devague/.claude/skills/summarize-delivery/` | **devague** (origin, cited directly) | delivery-accountability leg (leg 8 of 8). **Cited from devague, not guildmaster** — see "Supplier lag". Verbatim. Wrapper omitted (as above). | 2026-09-04 |
+| `recall` | `../devague/.claude/skills/recall/` | **eidetic-cli** (re-broadcast; cited via devague) | Search the shared `eidetic` memory store (exact / approximate / keyword / hybrid). **Cite-don't-import** — do not hand-edit `scripts/recall.sh`. The wrapper resolves the memory scope at runtime from the nearest `culture.yaml` `suffix:`, so this copy scopes to **`jetson-ai-lab-cli`**, not devague — no adaptation needed. Requires `eidetic` on PATH. Verbatim (already carried `type: command`). | 2026-09-04 |
+| `remember` | `../devague/.claude/skills/remember/` | **eidetic-cli** (re-broadcast; cited via devague) | Ingest records into the `eidetic` store (single JSON or NDJSON batch; idempotent upsert by id). Same runtime scope resolution as `recall` → `jetson-ai-lab-cli`. Requires `eidetic` on PATH. Verbatim (already carried `type: command`). | 2026-09-04 |
+
+## Supplier lag — the five devague legs cited from origin (2026-09-04)
+
+`scope`, `challenge`, `deviate`, `validate-delivery`, and `summarize-delivery`
+are vendored **directly from `agentculture/devague`**, breaking this file's
+normal "cite guildmaster's copy" rule. The reason is a real supplier lag found
+at sync time:
+
+- guildmaster's `challenge`, `deviate`, and `summarize-delivery` still document
+  a **six-leg** flow (`scope -> think -> spec-to-plan -> assign-to-workforce ->
+  deviate -> summarize-delivery`), predating `challenge`'s and
+  `validate-delivery`'s insertion into the arc;
+- guildmaster has **no `validate-delivery` skill at all**;
+- devague's copies document the current **eight-leg** flow:
+  `scope -> think -> challenge -> spec-to-plan -> assign-to-workforce ->
+  deviate -> validate-delivery -> summarize-delivery`.
+
+Vendoring guildmaster's copies would have shipped docs that contradict the
+method as it actually stands. devague is the **origin** for all eight legs
+(guildmaster only re-broadcasts), so citing origin is the deterministic choice
+until guildmaster re-broadcasts.
+
+Guildmaster's copies do carry `scripts/<name>.sh` portability wrappers that
+devague's lack. Those are omitted here: each forwards its arguments to
+`devague` verbatim, and `devague` resolves on PATH in this repo.
+
+**On re-sync:** re-check guildmaster first. Once it re-broadcasts the eight-leg
+versions, move these five rows back to the guildmaster upstream path and pick up
+the wrappers.
+
+## `.pr_agent.toml` (not a skill)
+
+Vendored from `../devague/.pr_agent.toml` on 2026-09-04. The Qodo/PR-Agent
+reviewer rules and the whole **devague ledger-audit** block are kept verbatim —
+they audit obligations, evidence, deltas and lapses, and this repo now drives
+itself with devague, so they apply unchanged.
+
+Adapted for this consumer: the header names `jetson-ai-lab-cli` and records the
+vendoring, and a **jetson-ai-lab-cli invariants** block was added (zero runtime
+dependencies, the agent-first rubric, the read-only/public-only Discord
+constraints, `from __future__ import annotations`, and cite-don't-import for
+vendored skills) so the reviewer enforces this repo's CLAUDE.md rules.
+
+On re-sync: take upstream's reviewer + ledger-audit rules, keep the local
+invariants block.
 
 ## Locally-authored skills (not vendored)
 
