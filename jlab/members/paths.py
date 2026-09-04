@@ -63,7 +63,7 @@ def members_reports_dir() -> Path:
     if root is None:
         raise CliError(
             EXIT_ENV_ERROR,
-            "cannot resolve the jetson-ai-lab-cli repo root for the members " "report output path",
+            "cannot resolve the jetson-ai-lab-cli repo root for the members report output path",
             "run this from an editable/source checkout of jetson-ai-lab-cli "
             "(a wheel install has no culture.yaml to anchor on); the members "
             "report refuses to write outside its gitignored repo-relative "

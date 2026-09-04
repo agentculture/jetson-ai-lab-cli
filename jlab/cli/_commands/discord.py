@@ -83,7 +83,7 @@ def cmd_discord_active(args: argparse.Namespace) -> int:
     json_mode = bool(getattr(args, "json", False))
 
     emit_diagnostic(
-        f"probing public text channels (limit {fetch_limit}, " f"concurrency {concurrency}) ..."
+        f"probing public text channels (limit {fetch_limit}, concurrency {concurrency}) ..."
     )
 
     result = _discord.active_scan(
@@ -118,7 +118,7 @@ def cmd_discord_active(args: argparse.Namespace) -> int:
 # -- members ------------------------------------------------------------
 
 
-def cmd_discord_members(args: argparse.Namespace) -> int:
+def cmd_discord_members(args: argparse.Namespace) -> int | None:
     """Scan, aggregate, and (for humans) render an id-only members report.
 
     ``--json`` emits the **aggregate** stage only — id-only statistics, no
@@ -157,7 +157,7 @@ def cmd_discord_members(args: argparse.Namespace) -> int:
     if json_mode:
         # id-only: stop here, never touch resolve_authors.
         emit_result(agg, json_mode=True)
-        return 0
+        return None
 
     emit_diagnostic(f"resolving {len(agg['members'])} author id(s) to names ...")
     stats_by_author_id = {member["author_id"]: member for member in agg["members"]}
@@ -179,7 +179,7 @@ def cmd_discord_members(args: argparse.Namespace) -> int:
         excluded_count=excluded_count,
     )
     emit_result(str(path), json_mode=False)
-    return 0
+    return None
 
 
 # -- doctor -----------------------------------------------------------------

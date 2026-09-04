@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from jlab.cli._errors import CliError
 from jlab.members.report import render_report, write_report
 
 HOSTILE_NAME = '<script>alert(1)</script>"><img src=x onerror=alert(2)>'
@@ -348,5 +349,6 @@ def _generated_at_of(path: Path) -> str:
 
 
 def test_render_report_rejects_a_non_mapping_aggregate():
-    with pytest.raises(Exception):
+    with pytest.raises(CliError) as exc:
         render_report(None)  # type: ignore[arg-type]
+    assert "aggregate mapping" in exc.value.message
