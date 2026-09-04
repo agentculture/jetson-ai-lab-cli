@@ -36,19 +36,53 @@ casually**:
   path: it wraps only the sibling **`discord-bot-cli`** *read* verbs
   (`channel list`, `channel messages`). Never add post/react/thread calls here.
 - **Public channels only.** Private / role-gated channels are excluded from every
-  default code path; their names and contents must not leak into a scan result or
-  into the committed `data/channels.json`. "Public" = the guild's `@everyone` role
-  can `view_channel`. The stock `channel list` doesn't expose that, so
-  `scripts/channels.py` reuses `discord_bot_cli.discord_client.run()` *as a
-  library* (cite-don't-import — no tool edit) to add a `public` flag, then filters
-  on it. `channels --all` is the only opt-in that includes private channels.
+  default code path; their names and contents must not leak into a scan result.
+  "Public" = the guild's `@everyone` role can `view_channel`. The stock
+  `channel list` doesn't expose that, so the `jlab discord` seam (`jlab/cli/
+  _discord.py`) reuses `discord_bot_cli`'s client *as a library* (cite-don't-import
+  — no tool edit) to add a `public` flag, then filters on it. `channels --all` is
+  the only opt-in that includes private channels.
 
 Operational facts: the token lives in **`DISCORD_BOT_TOKEN`** (read from the env,
 never a flag). `discord-bot-cli` needs its `[discord]` extra — the skill runs it
 from the sibling **`~/git/discord-bot-cli`** checkout's venv by default (override
-via `DISCORD_BOT_CLI_PROJECT` / `DISCORD_BOT_CLI`). `scan.sh active` ranks public
-text channels by last-30-day traffic (~100 channels in ~20s at `--par 8`).
-`data/channels.json` is a committed **public-only** channel-map snapshot.
+via `DISCORD_BOT_CLI_PROJECT` / `DISCORD_BOT_CLI`). `jlab discord active` ranks
+public text channels by last-30-day traffic (~100 channels in ~20s at `--par 8`).
+
+**Doc-drift note:** `.claude/skills/jetson-discord-scan/scripts/scan.sh` is now a
+5-line stub — `exec uv run jlab discord "$@"` — pointing straight at the `jlab`
+CLI; it does not itself implement `active`'s `--par` ranking (that lives in
+`jlab/cli/_discord.py`). There is also no committed `data/channels.json` anywhere
+in this repo; a public-only channel map, if you want one, is whatever
+`jlab discord channels` prints on demand — nothing is checked in.
+
+### Members: participation statistics for outreach (`jlab discord members`)
+
+`jlab discord members` extends the same read-only, public-only seam to a
+per-person view. It scans public **text** channels over a time window (default
+90 days, override with `--since`), aggregates by `author.id` only — never by
+username — and writes a gitignored HTML report to a fixed, repo-relative path,
+printing that path on success; `--json` emits the same statistics id-only (no
+name resolution). Display names are resolved from ids in one final batch step,
+only at render time, so the aggregation stage never touches or stores a
+human-readable identity.
+
+**The CLI issues no verdict.** It organizes statistics — message counts, breadth
+across channels, thread/question starts, and length-based substance signals —
+so a maintainer or agent can read the report and judge who to approach as a
+presenter. It never ranks, scores, or labels anyone "most active," and it never
+emits a presenter shortlist; that judgment stays with the human or agent reading
+the output. Message *content* never leaves the aggregation stage — only lengths
+and counts survive into the statistics.
+
+Other boundaries carried over or added for this path: bots and webhooks are
+excluded via `author.bot`; members who have left the guild are excluded by
+default, with a flag to include everyone regardless of current membership;
+voice channels are deliberately out of scope (participants who only attend
+voice sessions won't appear in the report — a recorded decision, not an
+oversight), and forum channels/threads are a possible follow-up, not covered
+today. The report file itself is gitignored and must never be committed —
+running the verb is the only way to get one, and its output stays local.
 
 ## Running the CLI — the command-name trap
 
