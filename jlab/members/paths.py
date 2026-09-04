@@ -78,6 +78,20 @@ def members_report_path(filename: str = _DEFAULT_REPORT_FILENAME) -> Path:
     """Return the fixed, repo-anchored path for the generated members report.
 
     ``filename`` may be overridden by callers that need a distinct name
-    (e.g. tests), but always resolves inside :func:`members_reports_dir`.
+    (e.g. tests), but is constrained to a bare filename: the report carries
+    person-level data and containment is the point (c21/h30). A name with any
+    path separator, a parent reference, or an absolute root would escape the
+    gitignored directory — ``members_report_path("../../x.html")`` resolved
+    outside the repo entirely before this guard existed — so those are refused
+    rather than normalised.
     """
+    if filename != Path(filename).name or filename in {"", ".", ".."}:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"report filename must be a bare filename, got {filename!r}",
+            remediation=(
+                "pass a plain name like 'members-report.html' — the report "
+                "path is fixed inside this repository and cannot be redirected"
+            ),
+        )
     return members_reports_dir() / filename

@@ -261,7 +261,12 @@ async def _drain(
     """Drain ``history`` into *collected*; return ``True`` if the cap stopped it."""
     async for message in _history(channel, limit=limit, after=after):
         collected.append(message)
-        if max_messages is not None and len(collected) >= max_messages:
+        if max_messages is not None and len(collected) > max_messages:
+            # Overshoot by one, then drop it: hitting the cap exactly means the
+            # window WAS fully read, and reporting that as 'partial' would
+            # understate real coverage. Only a message beyond the cap proves
+            # truncation.
+            collected.pop()
             return True
     return False
 

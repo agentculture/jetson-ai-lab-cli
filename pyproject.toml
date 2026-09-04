@@ -1,6 +1,6 @@
 [project]
 name = "jetson-ai-lab"
-version = "0.5.0"
+version = "0.6.0"
 description = "Discord-facing knowledge fetch & index agent for the Jetson AI Lab community — fetches and indexes Jetson AI Lab docs/sources and answers members' questions on Discord."
 readme = "README.md"
 license = "MIT"

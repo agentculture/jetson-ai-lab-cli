@@ -5,13 +5,78 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-09-04
+## [0.6.0] - 2026-09-04
 
 ### Added
 
+- **`jlab discord members` — anonymous participation statistics for the Jetson
+  AI Lab Discord.** Scans public text channels over a window (default 90 days,
+  `--since`), aggregates by `author.id` only, and writes a gitignored HTML
+  report with inline-SVG diagrams, printing its path. **It issues no verdict:**
+  no ranking, no score, no presenter shortlist — the four signals (message
+  count, distinct channels, question starts, length-based substance) are shown
+  side by side for a human or agent to read. Names are resolved from ids in one
+  batched final step, so the scan and aggregation stages never hold a username;
+  `--json` stays id-only because stdout redirection is uncontainable. Bots are
+  excluded via `author.bot`, and authors who have left the guild are excluded
+  by default (`--include-departed` overrides, and the omitted count is always
+  reported).
+- Windowed history paging past Discord's 100-message cap, with an explicit
+  per-channel `ok` / `partial` / `failed` status so a failed read is never
+  mistaken for an empty channel.
+- `--concurrency` on `jlab discord active` and the new members scan; both
+  fan-outs are now bounded by an `asyncio.Semaphore` (default 4) with 429
+  backoff.
+- Vendored the five missing devague legs (`scope`, `challenge`, `deviate`,
+  `validate-delivery`, `summarize-delivery`), cited from devague rather than
+  guildmaster — guildmaster's copies still document a six-leg flow and lack
+  `validate-delivery` entirely. Rationale in `docs/skill-sources.md`.
+- `.pr_agent.toml`: devague's ledger-audit rules verbatim plus this repo's
+  invariants (zero runtime deps, the agent-first rubric, read-only/public-only
+  Discord).
+- Spec, plan and delivery summary under `docs/specs/`, `docs/plans/` and
+  `docs/deliveries/`.
+
 ### Changed
 
+- `jlab discord active` output shape is unchanged, but its fan-out is now
+  semaphore-bounded and its `--par 8` documentation — a flag that never
+  existed — is replaced with the measured `--concurrency 4` default.
+- README documents the expected runtime (~5 minutes for a 90-day run) with a
+  per-phase breakdown, rather than leaving it to be discovered by running it.
+
 ### Fixed
+
+- `members_report_path()` refused to constrain its `filename` argument, so a
+  name containing `..` or a path separator escaped the gitignored report
+  directory entirely. Now refused with a structured error.
+- The report's "Window end (newest message considered)" showed the scan finish
+  time, overstating the range actually covered.
+- A channel holding exactly the message cap was reported as `partial` when its
+  window had in fact been read in full.
+- `test_seam_missing_extra_raises_env_error` inherited the `[discord]` extra's
+  absence from the environment; it now simulates absence and holds either way.
+- Markdown lint now ignores `.venv/**`, `docs/plans/**` and `docs/deliveries/**`.
+
+## [0.5.0] - 2026-06-23
+
+### Added
+
+- **Vendored the `remember` + `recall` memory skills from eidetic-cli**
+  (cite-don't-import) — the write/read halves of eidetic's shared
+  `~/.eidetic/memory` surface, so this agent (Claude and its colleague backend)
+  can persist facts across sessions and recall them later, sharing one store.
+  `remember` drives `eidetic remember` (idempotent upsert of one JSON record or
+  an NDJSON batch on stdin, dedup by id + content hash); `recall` drives
+  `eidetic recall` with four search modes — exact / approximate / keyword /
+  hybrid — each hit carrying text, full provenance metadata, a relevance score,
+  and a freshness signal. The `.sh` wrappers are byte-verbatim from eidetic-cli
+  (their first-party origin); each `SKILL.md` is localized only in the
+  illustrative `--scope <nick>` examples (Provenance keeps "First-party to
+  eidetic-cli"). Both default to this agent's PRIVATE scope, reading the suffix
+  from `culture.yaml`. Runtime dep: the `eidetic` CLI on PATH (else a local
+  eidetic-cli checkout with `uv`). Propagated by rollout-cli's `eidetic-memory`
+  recipe.
 
 ## [0.4.0] - 2026-06-19
 

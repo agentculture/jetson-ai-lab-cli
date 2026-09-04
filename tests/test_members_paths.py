@@ -89,3 +89,34 @@ def test_refuses_to_write_when_no_repo_root_is_found(
 
     with pytest.raises(CliError):
         members_paths.members_report_path()
+
+
+def test_report_filename_cannot_escape_the_contained_directory() -> None:
+    """A hostile filename must be refused, not normalised (c21/h30).
+
+    Regression: `members_report_path("../../../../tmp/x.html")` resolved to a
+    path outside the repository entirely, and therefore outside the .gitignore
+    rule that contains person-level report data.
+    """
+    for hostile in (
+        "../../../../tmp/ESCAPED.html",
+        "../x.html",
+        "sub/dir.html",
+        "/etc/passwd",
+        "..",
+        ".",
+        "",
+    ):
+        with pytest.raises(CliError) as exc:
+            members_paths.members_report_path(hostile)
+        assert exc.value.code == 2
+        assert exc.value.remediation
+
+
+def test_report_filename_accepts_a_bare_name() -> None:
+    """The legitimate override still works."""
+    assert members_paths.members_report_path("other.html").name == "other.html"
+    assert (
+        members_paths.members_report_path("other.html").parent
+        == members_paths.members_reports_dir()
+    )

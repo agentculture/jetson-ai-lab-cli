@@ -184,7 +184,7 @@ def _metadata_block(
     items: list[tuple[str, str]] = [
         ("Scan finished", _text(generated_at)),
         ("Window start (oldest message considered)", _text(aggregate.get("cutoff"))),
-        ("Window end (newest message considered)", _text(generated_at)),
+        ("Window end (scan cutoff)", _text(generated_at)),
         ("Window length", f"{_num(aggregate.get('since_days'))} days"),
         ("Discord guild id", _text(aggregate.get("guild_id"))),
         (
