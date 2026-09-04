@@ -76,9 +76,12 @@ def cmd_discord_active(args: argparse.Namespace) -> int:
     fetch_limit = int(getattr(args, "limit", 30))
     top = int(getattr(args, "top", 0))
     preview = int(getattr(args, "preview", 5))
+    concurrency = int(getattr(args, "concurrency", _discord.DEFAULT_CONCURRENCY))
     json_mode = bool(getattr(args, "json", False))
 
-    emit_diagnostic(f"probing public text channels (limit {fetch_limit}) ...")
+    emit_diagnostic(
+        f"probing public text channels (limit {fetch_limit}, " f"concurrency {concurrency}) ..."
+    )
 
     result = _discord.active_scan(
         guild_id,
@@ -86,6 +89,7 @@ def cmd_discord_active(args: argparse.Namespace) -> int:
         fetch_limit=fetch_limit,
         top=top,
         preview=preview,
+        concurrency=concurrency,
     )
 
     if json_mode:
@@ -134,7 +138,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
             "items": [
                 "channels [--all] — list guild channels (public-only by default)",
                 "read <channel_id> [--limit N] — read recent messages from a channel",
-                "active [--since D] [--limit N] [--top K] [--preview P] — rank active channels",
+                "active [--since D] [--limit N] [--top K] [--preview P] "
+                "[--concurrency C] — rank active channels",
                 "doctor — verify token + guild readable",
                 "overview — describe this noun group",
             ],
@@ -222,6 +227,15 @@ def register(sub: argparse._SubParsersAction) -> None:
         type=int,
         default=5,
         help="Messages echoed per active channel (default 5).",
+    )
+    ac.add_argument(
+        "--concurrency",
+        type=int,
+        default=_discord.DEFAULT_CONCURRENCY,
+        help=(
+            "Channels read concurrently "
+            f"(default {_discord.DEFAULT_CONCURRENCY}; keeps Discord rate limits happy)."
+        ),
     )
     ac.add_argument("--json", action="store_true", help=_JSON_HELP)
     ac.set_defaults(func=cmd_discord_active, json=False)
