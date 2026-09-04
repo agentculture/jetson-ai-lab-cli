@@ -561,9 +561,16 @@ def test_active_scan_empty_when_no_active(monkeypatch: pytest.MonkeyPatch) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_seam_missing_extra_raises_env_error() -> None:
-    """The real _seam raises CliError(2) when discord_bot_cli is absent."""
-    # discord_bot_cli is not installed in the test env (optional [discord] extra).
+def test_seam_missing_extra_raises_env_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real _seam raises CliError(2) when discord_bot_cli is absent.
+
+    The absence is simulated rather than inherited from the environment: a
+    ``None`` entry in ``sys.modules`` makes the import raise ImportError. The
+    optional [discord] extra IS installed in this repo's venv (so `jlab discord
+    doctor` can reach Discord), and this test must assert the missing-extra
+    contract either way.
+    """
+    monkeypatch.setitem(sys.modules, "discord_bot_cli", None)
     with pytest.raises(CliError) as exc:
         _discord._seam()
     assert exc.value.code == 2
