@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -256,7 +257,7 @@ def test_discord_active_json(
     )
     monkeypatch.setattr(
         "jlab.cli._discord.active_scan",
-        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5: canned,
+        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5, **_kw: canned,
     )
     rc = main(["discord", "active", "--json"])
     assert rc == 0
@@ -283,7 +284,7 @@ def test_discord_active_probing_goes_to_stderr(
     )
     monkeypatch.setattr(
         "jlab.cli._discord.active_scan",
-        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5: canned,
+        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5, **_kw: canned,
     )
     rc = main(["discord", "active", "--json"])
     assert rc == 0
@@ -320,7 +321,7 @@ def test_discord_active_text(
     )
     monkeypatch.setattr(
         "jlab.cli._discord.active_scan",
-        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5: canned,
+        lambda guild_id, since_days=30, fetch_limit=30, top=0, preview=5, **_kw: canned,
     )
     rc = main(["discord", "active", "--since", "7"])
     assert rc == 0
@@ -413,15 +414,36 @@ class _FakePerms:
 
 
 class _FakeAuthor:
-    def __init__(self, id: str, name: str) -> None:
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        *,
+        bot: bool = False,
+        global_name: str | None = None,
+        nick: str | None = None,
+    ) -> None:
         self.id = id
         self.name = name
+        self.bot = bot
+        self.global_name = global_name
+        self.nick = nick
 
 
 class _FakeMsg:
-    def __init__(self, id: str, author: str, content: str, created_at: datetime) -> None:
+    def __init__(
+        self,
+        id: str,
+        author: str,
+        content: str,
+        created_at: datetime,
+        *,
+        bot: bool = False,
+        global_name: str | None = None,
+        nick: str | None = None,
+    ) -> None:
         self.id = id
-        self.author = _FakeAuthor(id + "a", author)
+        self.author = _FakeAuthor(id + "a", author, bot=bot, global_name=global_name, nick=nick)
         self.content = content
         self.created_at = created_at
 
@@ -755,21 +777,32 @@ def test_active_scan_top_truncates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _probe_channel — pin TODAY's behaviour directly (no stubbed active_scan).
+# _probe_channel — per-channel read status (CHANGED from the t1 pins).
 #
 # These tests drive `_probe_channel` straight, with a fake discord.py-shaped
 # channel object, instead of going through `active_scan` (which the tests
 # above either monkeypatch entirely — see test_discord_active_json at line
 # ~258 and test_discord_active_probing_goes_to_stderr at ~267 — or drive with
 # a fake *seam*/guild that never lets a caller see `_probe_channel`'s own
-# return value). A later task changes what `_probe_channel` does with a
-# failing `history()` call; these tests exist so that change shows up as a
-# diff here, not as a silent behaviour drift.
+# return value).
+#
+# t1 pinned the OLD contract on purpose so this change would show up as a diff
+# rather than silent drift. Two assertions below were deliberately rewritten:
+#
+#   * the bare `except Exception: msgs = []` swallow is gone — a failing read
+#     is now `status="failed"` with a `reason`, and is distinguishable from an
+#     empty channel (`status="ok"`, `message_count=0`);
+#   * a serialized message's `author` is now a dict carrying the authoritative
+#     `bot` flag and a display name, not a bare username string.
+#
+# `active_scan`'s own output shape is UNCHANGED — see
+# test_discord_active_output_shape_unchanged below, still passing untouched:
+# its preview entries still expose `author` as a plain display-name string.
 # ---------------------------------------------------------------------------
 
 
-def test_probe_channel_direct_swallows_history_exception() -> None:
-    """TODAY: a channel.history() failure is swallowed; messages come back empty.
+def test_probe_channel_direct_reports_failed_status() -> None:
+    """A channel.history() failure is reported, not swallowed into an empty list.
 
     This calls `_probe_channel` directly (not via `active_scan`/a stubbed
     seam) so the assertion is about `_probe_channel`'s own contract, not
@@ -785,10 +818,25 @@ def test_probe_channel_direct_swallows_history_exception() -> None:
 
     result = asyncio.run(_discord._probe_channel(_BoomChannel(), fetch_limit=5))
 
-    # Today's contract: the exception is swallowed and the channel still
-    # comes back as a well-formed row with an empty message list — it does
-    # NOT propagate the exception out of _probe_channel.
-    assert result == {"id": "c-boom", "name": "flaky", "messages": []}
+    # The exception still does NOT propagate out of _probe_channel (one bad
+    # channel must not abort a whole scan) — but it is no longer invisible.
+    assert result["id"] == "c-boom"
+    assert result["name"] == "flaky"
+    assert result["messages"] == []
+    assert result["message_count"] == 0
+    assert result["status"] == _discord.STATUS_FAILED
+    assert result["complete"] is False
+    assert "cannot read history" in result["reason"]
+
+
+def test_probe_channel_empty_channel_is_ok_not_failed() -> None:
+    """An EMPTY channel reads `ok`; only a genuinely failed read reads `failed`."""
+    chan = _FakeChannel("c-empty", "quiet", "text", True, [])
+    result = asyncio.run(_discord._probe_channel(chan, fetch_limit=5))
+    assert result["status"] == _discord.STATUS_OK
+    assert result["message_count"] == 0
+    assert result["reason"] is None
+    assert result["complete"] is True
 
 
 def test_probe_channel_direct_happy_path_serializes_messages() -> None:
@@ -806,8 +854,10 @@ def test_probe_channel_direct_happy_path_serializes_messages() -> None:
 
     assert result["id"] == "c1"
     assert result["name"] == "general"
-    assert [m["author"] for m in result["messages"]] == ["ann"]
+    # CHANGED from the t1 pin: `author` is a dict, not a bare name string.
+    assert [m["author"]["name"] for m in result["messages"]] == ["ann"]
     assert result["messages"][0]["content"] == "hi"
+    assert result["status"] == _discord.STATUS_OK
 
 
 def test_discord_active_output_shape_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -902,3 +952,485 @@ def test_active_scan_has_no_per_author_aggregation(monkeypatch: pytest.MonkeyPat
     }
     assert aggregation_like_keys.isdisjoint(row)
     assert row["msgs_in_window"] == 3  # channel-level count only, not per-author
+
+
+# ---------------------------------------------------------------------------
+# t2 — windowed paging, bounded concurrency, per-channel status, author.bot.
+#
+# Fake discord.py-shaped objects only; nothing here touches Discord.
+# ---------------------------------------------------------------------------
+
+
+class _WindowChannel:
+    """A channel whose ``history`` honours ``after`` and records its calls.
+
+    ``limit=None`` + ``after=<cutoff>`` is what discord.py paginates for us, so
+    this fake yields *every* matching message regardless of the 100-cap — the
+    behaviour the real paging relies on.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        messages: list,
+        *,
+        public: bool = True,
+        type_name: str = "text",
+    ) -> None:
+        self.id = id
+        self.name = name
+        self.type = _FakeType(type_name)
+        self._public = public
+        self._messages = messages  # oldest-first
+        self.history_calls: list[dict] = []
+
+    def permissions_for(self, _role: object) -> _FakePerms:
+        return _FakePerms(self._public)
+
+    def history(self, limit=None, after=None):
+        self.history_calls.append({"limit": limit, "after": after})
+        selected = [m for m in self._messages if after is None or m.created_at > after]
+        if limit is not None:
+            selected = list(reversed(selected))[:limit]
+
+        async def _gen():
+            for m in selected:
+                yield m
+
+        return _gen()
+
+
+def _window_msgs(n: int, *, author: str = "ann", bot: bool = False) -> list:
+    now = datetime.now(timezone.utc)
+    return [
+        _FakeMsg(f"{author}{i}", author, f"m{i}", now - timedelta(minutes=n - i), bot=bot)
+        for i in range(n)
+    ]
+
+
+# -- 1. windowed paging past the 100-message cap -----------------------------
+
+
+def test_probe_channel_pages_window_past_the_100_cap() -> None:
+    """`after=<cutoff>` with no limit reads the whole window, not the first 100."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _WindowChannel("c1", "general", _window_msgs(250))
+
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff))
+
+    assert result["message_count"] == 250  # well past the upstream 100 cap
+    assert result["status"] == _discord.STATUS_OK
+    assert result["complete"] is True
+    # The window is expressed as an `after` cursor with no per-call limit.
+    assert chan.history_calls == [{"limit": None, "after": cutoff}]
+
+
+def test_probe_channel_honours_the_after_cutoff() -> None:
+    """Messages older than the cutoff are excluded by the `after` cursor."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+    chan = _WindowChannel(
+        "c1",
+        "general",
+        [
+            _FakeMsg("old", "ann", "old", now - timedelta(days=40)),
+            _FakeMsg("new", "ann", "new", now - timedelta(days=1)),
+        ],
+    )
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff))
+    assert [m["content"] for m in result["messages"]] == ["new"]
+
+
+def test_probe_channel_message_cap_marks_partial_not_silent_truncation() -> None:
+    """A window that cannot be fully paged is `partial` — never silently cut."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _WindowChannel("c1", "busy", _window_msgs(500))
+
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff, max_messages=100))
+
+    assert result["message_count"] == 100
+    assert result["status"] == _discord.STATUS_PARTIAL
+    assert result["complete"] is False
+    assert "cap" in result["reason"]
+
+
+def test_probe_channel_orders_messages_oldest_first() -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _WindowChannel("c1", "general", _window_msgs(5))
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff))
+    stamps = [m["created_at"] for m in result["messages"]]
+    assert stamps == sorted(stamps)
+
+
+# -- rate limits -------------------------------------------------------------
+
+
+class _RateLimited(Exception):
+    def __init__(self, retry_after: float = 0.25) -> None:
+        super().__init__("429 Too Many Requests")
+        self.status = 429
+        self.retry_after = retry_after
+
+
+class _RateLimitedOnceChannel(_WindowChannel):
+    """Raises 429 on the first history call, then succeeds."""
+
+    def history(self, limit=None, after=None):
+        self.history_calls.append({"limit": limit, "after": after})
+        if len(self.history_calls) == 1:
+
+            async def _boom():
+                raise _RateLimited()
+                yield  # pragma: no cover
+
+            return _boom()
+        return super().history(limit=limit, after=after)
+
+
+def test_probe_channel_retries_a_rate_limited_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 429 backs off and retries rather than reporting the channel failed."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _RateLimitedOnceChannel("c1", "general", _window_msgs(3))
+
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff))
+
+    assert slept == [0.25]  # the server's own retry_after, honoured
+    assert result["status"] == _discord.STATUS_OK
+    assert result["message_count"] == 3
+
+
+def test_probe_channel_reports_failed_when_rate_limit_never_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    class _AlwaysLimited(_WindowChannel):
+        def history(self, limit=None, after=None):
+            self.history_calls.append({"limit": limit, "after": after})
+
+            async def _boom():
+                raise _RateLimited()
+                yield  # pragma: no cover
+
+            return _boom()
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _AlwaysLimited("c1", "general", [])
+    result = asyncio.run(_discord._probe_channel(chan, None, after=cutoff))
+    assert result["status"] == _discord.STATUS_FAILED
+    assert "429" in result["reason"]
+    assert len(chan.history_calls) == 4  # initial try + 3 retries
+
+
+def test_retry_after_ignores_non_rate_limit_errors() -> None:
+    assert _discord._retry_after(RuntimeError("boom")) is None
+    assert _discord._retry_after(_RateLimited(2.0)) == 2.0
+
+
+# -- 2. bounded concurrency --------------------------------------------------
+
+
+class _ConcurrencyProbeChannel(_WindowChannel):
+    """Tracks how many history reads are in flight simultaneously."""
+
+    def __init__(self, id: str, name: str, tracker: dict) -> None:
+        super().__init__(id, name, _window_msgs(2))
+        self._tracker = tracker
+
+    def history(self, limit=None, after=None):
+        tracker = self._tracker
+        messages = list(self._messages)
+
+        async def _gen():
+            tracker["live"] += 1
+            tracker["peak"] = max(tracker["peak"], tracker["live"])
+            try:
+                for m in messages:
+                    await asyncio.sleep(0)
+                    yield m
+            finally:
+                tracker["live"] -= 1
+
+        return _gen()
+
+
+def test_active_scan_bounds_channel_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No unbounded gather: in-flight channel reads never exceed --concurrency."""
+    tracker = {"live": 0, "peak": 0}
+    guild = _FakeGuild([_ConcurrencyProbeChannel(f"c{i}", f"ch{i}", tracker) for i in range(20)])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.active_scan(123, since_days=30, fetch_limit=5, concurrency=3)
+
+    assert result["probed_text_channels"] == 20
+    assert tracker["peak"] <= 3
+    assert tracker["peak"] > 1  # genuinely concurrent, just capped
+
+
+def test_scan_window_bounds_channel_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracker = {"live": 0, "peak": 0}
+    guild = _FakeGuild([_ConcurrencyProbeChannel(f"c{i}", f"ch{i}", tracker) for i in range(20)])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.scan_window(123, since_days=30, concurrency=2)
+
+    assert result["concurrency"] == 2
+    assert tracker["peak"] <= 2
+
+
+def test_default_concurrency_is_conservative() -> None:
+    assert _discord.DEFAULT_CONCURRENCY == 4
+
+
+def test_bad_concurrency_is_a_user_error() -> None:
+    for bad in (0, -1):
+        with pytest.raises(CliError) as exc:
+            _discord.active_scan(123, concurrency=bad)
+        assert exc.value.code == 1
+        with pytest.raises(CliError) as exc:
+            _discord.scan_window(123, concurrency=bad)
+        assert exc.value.code == 1
+
+
+def test_scan_window_rejects_a_nonsense_window() -> None:
+    with pytest.raises(CliError) as exc:
+        _discord.scan_window(123, since_days=0)
+    assert exc.value.code == 1
+
+
+def test_discord_active_accepts_concurrency_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    seen: dict = {}
+
+    def _fake_scan(guild_id, **kwargs):
+        seen.update(kwargs)
+        return {
+            "guild_id": str(guild_id),
+            "since_days": 30,
+            "fetch_limit": 30,
+            "probed_text_channels": 0,
+            "active_channels": 0,
+            "channels": [],
+        }
+
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr("jlab.cli._discord.active_scan", _fake_scan)
+    assert main(["discord", "active", "--concurrency", "2", "--json"]) == 0
+    assert seen["concurrency"] == 2
+    assert json.loads(capsys.readouterr().out)
+
+
+# -- 3. per-channel status through scan_window -------------------------------
+
+
+def test_scan_window_distinguishes_failed_from_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed read and an empty channel are never conflated."""
+
+    class _BoomChannel(_WindowChannel):
+        def history(self, limit=None, after=None):
+            raise RuntimeError("permission denied")
+
+    guild = _FakeGuild(
+        [
+            _WindowChannel("c1", "general", _window_msgs(3)),
+            _WindowChannel("c2", "empty", []),
+            _BoomChannel("c3", "flaky", []),
+            _WindowChannel("c4", "capped", _window_msgs(9)),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.scan_window(123, since_days=30, max_messages_per_channel=4)
+    by_name = {c["name"]: c for c in result["channels"]}
+
+    assert by_name["general"]["status"] == _discord.STATUS_OK
+    assert by_name["general"]["message_count"] == 3
+
+    # Empty: ok, zero messages, no reason.
+    assert by_name["empty"]["status"] == _discord.STATUS_OK
+    assert by_name["empty"]["message_count"] == 0
+    assert by_name["empty"]["reason"] is None
+
+    # Failed: NOT ok, and carries why.
+    assert by_name["flaky"]["status"] == _discord.STATUS_FAILED
+    assert "permission denied" in by_name["flaky"]["reason"]
+
+    # Partial: read some, but the window is truncated and says so.
+    assert by_name["capped"]["status"] == _discord.STATUS_PARTIAL
+    assert by_name["capped"]["complete"] is False
+
+    assert result["channels_ok"] == 2
+    assert result["channels_partial"] == 1
+    assert result["channels_failed"] == 1
+    assert result["complete"] is False  # coverage is never overstated
+
+
+def test_scan_window_complete_when_every_channel_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guild = _FakeGuild([_WindowChannel("c1", "general", _window_msgs(3))])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+    result = _discord.scan_window(123, since_days=30)
+    assert result["complete"] is True
+    assert result["channels_failed"] == 0
+    assert result["message_count"] == 3
+    assert result["since_days"] == 30
+    assert result["cutoff"]
+
+
+# -- 4. author.bot + display name --------------------------------------------
+
+
+def test_author_serialization_carries_bot_and_display_name() -> None:
+    author = _FakeAuthor("a1", "annuser", bot=False, global_name="Ann", nick="Ann (JAL)")
+    assert _discord._serialize_author(author) == {
+        "id": "a1",
+        "name": "annuser",
+        "display_name": "Ann (JAL)",  # per-guild nick wins
+        "bot": False,
+    }
+
+
+def test_author_display_name_falls_back_without_inventing() -> None:
+    # global_name when there is no nick.
+    assert (
+        _discord._serialize_author(_FakeAuthor("a2", "bobuser", global_name="Bob"))["display_name"]
+        == "Bob"
+    )
+    # username when there is neither — never a fabricated label.
+    assert _discord._serialize_author(_FakeAuthor("a3", "eve"))["display_name"] == "eve"
+
+
+def test_author_bot_flag_defaults_false_on_a_bare_user() -> None:
+    class _Bare:
+        id = 7
+        name = "someone"
+
+    assert _discord._serialize_author(_Bare()) == {
+        "id": "7",
+        "name": "someone",
+        "display_name": "someone",
+        "bot": False,
+    }
+
+
+def test_scan_window_excludes_bots_via_author_bot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bots are dropped on the authoritative flag, not a name heuristic."""
+    now = datetime.now(timezone.utc)
+    guild = _FakeGuild(
+        [
+            _WindowChannel(
+                "c1",
+                "general",
+                [
+                    # A HUMAN whose username looks bot-ish: a name heuristic
+                    # would wrongly drop them; author.bot keeps them.
+                    _FakeMsg("m0", "robotics-bot-fan", "hi", now - timedelta(minutes=3)),
+                    _FakeMsg("m1", "ann", "hey", now - timedelta(minutes=2)),
+                    # An actual bot, flagged as such.
+                    _FakeMsg("m2", "Helper", "beep", now - timedelta(minutes=1), bot=True),
+                ],
+            )
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.scan_window(123, since_days=30)
+    names = [m["author"]["name"] for m in result["channels"][0]["messages"]]
+    assert names == ["robotics-bot-fan", "ann"]
+    assert result["exclude_bots"] is True
+
+    kept = _discord.scan_window(123, since_days=30, exclude_bots=False)
+    assert len(kept["channels"][0]["messages"]) == 3
+
+
+def test_read_messages_author_carries_bot_and_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `read` verb uses the same author serializer (additive keys only)."""
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c1", "general", "text", True, [_FakeMsg("m0", "ann", "hi", now, global_name="Ann")]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    msgs = _discord.read_messages(999, limit=5)
+    assert msgs[0]["author"]["bot"] is False
+    assert msgs[0]["author"]["display_name"] == "Ann"
+    assert msgs[0]["author"]["name"] == "ann"  # existing key preserved
+
+
+# -- 5. public filtering happens BEFORE any message fetch --------------------
+
+
+class _NeverFetchChannel(_WindowChannel):
+    """A private channel: calling history() on it is a hard test failure."""
+
+    def history(self, limit=None, after=None):  # pragma: no cover - must not run
+        raise AssertionError("private channel history() must never be fetched")
+
+
+def test_scan_window_never_fetches_a_private_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = _FakeGuild(
+        [
+            _WindowChannel("c1", "general", _window_msgs(2)),
+            _NeverFetchChannel("c2", "staff-only", [], public=False),
+            _NeverFetchChannel("c3", "lounge", [], type_name="voice"),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.scan_window(123, since_days=30)
+
+    assert [c["name"] for c in result["channels"]] == ["general"]
+    assert result["scanned_text_channels"] == 1
+    # A private channel leaks neither its name nor a failed-row placeholder.
+    assert "staff-only" not in json.dumps(result)
+
+
+def test_active_scan_never_fetches_a_private_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    guild = _FakeGuild(
+        [
+            _WindowChannel("c1", "general", _window_msgs(2)),
+            _NeverFetchChannel("c2", "staff-only", [], public=False),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    result = _discord.active_scan(123, since_days=30, fetch_limit=5)
+
+    assert result["probed_text_channels"] == 1
+    assert "staff-only" not in json.dumps(result)
+
+
+# -- 6. the workaround stays isolated in one file ----------------------------
+
+
+def test_upstream_workaround_is_isolated_to_the_adapter() -> None:
+    """discord-bot-cli#14's replacement must be a single-file change.
+
+    Nothing outside `jlab/cli/_discord.py` may touch `author.bot`, a display
+    name, or `history(after=...)` directly.
+    """
+    root = pathlib.Path(_discord.__file__).resolve().parents[2]
+    adapter = pathlib.Path(_discord.__file__).resolve()
+    needles = ("author.bot", "global_name", ".history(")
+    offenders = []
+    for path in (root / "jlab").rglob("*.py"):
+        if path.resolve() == adapter:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(n in text for n in needles):
+            offenders.append(str(path.relative_to(root)))
+    assert offenders == []

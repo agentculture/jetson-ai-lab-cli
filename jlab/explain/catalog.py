@@ -174,12 +174,19 @@ _DISCORD_ACTIVE = """\
 # jetson-ai-lab-cli discord active
 
 Rank active public text channels by recent traffic. Probes all public text
-channels in a single REST session (``asyncio.gather``), then ranks in-process.
+channels in a single REST session, then ranks in-process. Private channels are
+filtered out before any message is fetched.
+
+Channel reads fan out concurrently but are bounded by a semaphore
+(`--concurrency`, default 4) so a ~100-channel guild never puts an unbounded
+number of requests in flight. Each channel read carries its own status, so a
+failed read is never mistaken for an empty channel.
 
 ## Usage
 
     jetson-ai-lab-cli discord active
     jetson-ai-lab-cli discord active --since 7 --top 10 --preview 3
+    jetson-ai-lab-cli discord active --concurrency 2
     jetson-ai-lab-cli discord active --json
 """
 
