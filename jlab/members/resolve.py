@@ -159,7 +159,7 @@ async def _resolve_one_async(guild: Any, author_id: str) -> ResolvedAuthor:
     # this module never trips test_discord.py's adapter-isolation guard,
     # which flags that exact identifier appearing anywhere outside
     # jlab/cli/_discord.py.
-    global_display_name = getattr(member, "global" + "_name", None)
+    global_display_name = getattr(member, "global_name", None)
     joined_at = getattr(member, "joined_at", None)
     return ResolvedAuthor(
         id=str(author_id),

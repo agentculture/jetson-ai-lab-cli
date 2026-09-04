@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-04T15:09:43Z",
-  "updated": "2026-09-04T15:57:52Z",
+  "updated": "2026-09-04T16:27:12Z",
   "claims": [
     {
       "id": "c1",
@@ -930,5 +930,123 @@
       "status": "approved"
     }
   ],
-  "obligations": []
+  "obligations": [
+    {
+      "id": "o1",
+      "claim_id": "c7",
+      "seam": "jlab/cli/_discord.py::_public_text_channels",
+      "behavior": "A channel the @everyone role cannot view_channel is never fetched \u2014 filtering happens before any history() call, not as a post-filter",
+      "source_text": "Public channels only. Per-member statistics are computed exclusively from channels the guild's @everyone role can view_channel; a private channel's participation must never reach a member's totals or the report.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o2",
+      "claim_id": "c8",
+      "seam": "jlab/cli/_discord.py + jlab/members/*",
+      "behavior": "No Discord write call (send/edit/delete/add_reaction/create_thread) exists anywhere on the members path",
+      "source_text": "Read-only. No post, react, thread-create, DM, or any other write path is added \u2014 the members report only reads history, consistent with the existing discord noun group.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o3",
+      "claim_id": "c9",
+      "seam": ".gitignore + jlab/members/paths.py",
+      "behavior": "git check-ignore exits 0 for the report output path",
+      "source_text": "Report output is gitignored and never committed. No person-level aggregation enters git history.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o4",
+      "claim_id": "c12",
+      "seam": "jlab/cli/_discord.py::_serialize_author",
+      "behavior": "Bot exclusion reads the authoritative author.bot flag; no username pattern-matching anywhere",
+      "source_text": "Bots and webhooks are excluded from all statistics; only human authors are counted.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o5",
+      "claim_id": "c16",
+      "seam": "jlab/members/aggregate.py",
+      "behavior": "The aggregate output contains author ids only \u2014 no username or display_name appears anywhere in it",
+      "source_text": "The scan and aggregation stages are anonymous: they key on author.id only and never store or emit a username. Human-readable names enter only at the final batch translation step that renders the report.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o6",
+      "claim_id": "c17",
+      "seam": "jlab/cli/_discord.py::active_scan + scan_window",
+      "behavior": "Every channel fan-out is bounded by an asyncio.Semaphore; no unbounded gather remains",
+      "source_text": "The scan must bound its concurrency. active_scan() today does asyncio.gather over EVERY public text channel with no cap (jlab/cli/_discord.py:238) \u2014 104 channels in the live guild. Under c15's full-window paging each channel becomes many paginated requests, so an uncapped gather puts hundreds of requests in flight at once and will hit Discord rate limits. Bound in-flight channel reads (a semaphore) and handle 429 backoff explicitly.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o7",
+      "claim_id": "c18",
+      "seam": "jlab/cli/_discord.py::_probe_channel",
+      "behavior": "A channel whose read fails returns status 'failed'; an empty channel returns status 'ok' with message_count 0 \u2014 the two are distinguishable",
+      "source_text": "A channel that FAILS to read must be distinguishable from a channel with no messages. _probe_channel() (jlab/cli/_discord.py:195-200) catches every exception and returns an empty message list, so a permissions error, a 429, or a transient failure silently contributes zero messages. Under a members report that understates real people's activity with no signal, and it directly contradicts h8's promise that incomplete coverage is reported rather than silently truncated.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o8",
+      "claim_id": "c20",
+      "seam": "jlab/members/aggregate.py",
+      "behavior": "No message content reaches the aggregate \u2014 only lengths and counts survive",
+      "source_text": "Message CONTENT never leaves the aggregation stage. The 'substance' signal uses message LENGTH and reply counts \u2014 numeric derivatives \u2014 so no member's words are stored in intermediate data or quoted in the report. c16 protects usernames but says nothing about content; note active_scan's existing 'preview' field (jlab/cli/_discord.py:180) does carry verbatim content, and the members path must not inherit it.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o9",
+      "claim_id": "c21",
+      "seam": "jlab/members/paths.py",
+      "behavior": "The report path resolves from the repo root regardless of CWD, and refuses with CliError(2) when no repo root exists",
+      "source_text": "The report's output path is fixed inside this repository (and gitignored there), or the command refuses to write. c9/h18 rely on .gitignore for containment, but .gitignore only protects THIS repo \u2014 a default of the current working directory means running the verb from another checkout writes person-level data into a repo with no such ignore rule, silently defeating c9.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o10",
+      "claim_id": "c23",
+      "seam": "jlab/members/report.py",
+      "behavior": "A display name containing markup renders as escaped literal text in the HTML, executing nothing",
+      "source_text": "Member display names are attacker-controlled strings and must be HTML-escaped where the report renders them. A Discord username or global_name can contain markup; injecting it unescaped into the generated page is a script-injection vector in an artifact maintainers open in Chrome. Applies to any user-derived string reaching the HTML, not just names.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o11",
+      "claim_id": "c24",
+      "seam": "jlab/cli/_commands/discord.py",
+      "behavior": "--json output is id-only: no resolved username or display_name appears in the JSON payload",
+      "source_text": "The --json output carries the same person-level data as the report and must be covered by the same containment rule as c21. c21 fixes the HTML report's path, but every jlab verb supports --json to stdout (rubric requirement), so 'jlab discord members --json > /some/other/repo/out.json' writes ranked, name-resolved member data anywhere the caller likes, entirely outside c9's gitignore and c21's fixed path. Either --json stays id-only (no name resolution), or it inherits the same containment and warning as the report.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o12",
+      "claim_id": "c26",
+      "seam": "jlab/explain/catalog.py",
+      "behavior": "explain resolves ('discord','members') and teken cli doctor --strict passes",
+      "source_text": "The members verb must register an explain-catalog entry at ('discord','members') and keep the discord noun's overview listing current. jlab/explain/catalog.py:222-227 registers one key per discord verb, and tests/test_cli.py::test_every_catalog_path_resolves asserts every registered path resolves \u2014 a new verb without a catalog entry fails CI, and 'teken cli doctor . --strict' enforces the same rubric rule.",
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "o13",
+      "claim_id": "c28",
+      "seam": "jlab/members/resolve.py",
+      "behavior": "Authors who left the guild are excluded by default and the excluded count is reported; a flag includes them",
+      "source_text": "Authors who have left the guild are excluded from the report by default, with an explicit flag to include every author regardless of current membership. The membership check uses guild.fetch_member (verified working under the existing read-only token) and runs inside the same batched translation session as name resolution, so it costs no extra pass. Departed authors are counted in coverage totals but omitted from the member statistics, and the report states how many were excluded.",
+      "origin": "llm",
+      "status": "proposed"
+    }
+  ]
 }
