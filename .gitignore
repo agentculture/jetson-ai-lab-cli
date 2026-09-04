@@ -231,3 +231,7 @@ skills.local.yaml
 
 # ask-colleague bookkeeping
 .colleague/
+
+# Discord members report: person-level community data, local-artifact only,
+# never committed. See jlab/members/paths.py.
+/data/reports/members/
