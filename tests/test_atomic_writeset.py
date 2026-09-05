@@ -39,7 +39,9 @@ def test_writes_all_files_on_success(tmp_path: Path) -> None:
     assert _read_all(dest) == files
 
 
-def test_no_partial_writes_visible_from_outside(tmp_path: Path) -> None:
+def test_no_partial_writes_visible_from_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The destination never contains a subset of the artifact set.
 
     This does not literally kill the process (that is not testable from
@@ -63,13 +65,10 @@ def test_no_partial_writes_visible_from_outside(tmp_path: Path) -> None:
             raise Boom("simulated crash between file writes")
         return real_write_text(self, data, *args, **kwargs)
 
-    monkey_target = Path.write_text
-    Path.write_text = flaky_write_text
-    try:
-        with pytest.raises(Boom):
-            write_artifact_set(dest, files)
-    finally:
-        Path.write_text = monkey_target
+    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+    with pytest.raises(Boom):
+        write_artifact_set(dest, files)
 
     assert not dest.exists()
     # No stray temp directories left in the parent either.
@@ -77,7 +76,9 @@ def test_no_partial_writes_visible_from_outside(tmp_path: Path) -> None:
     assert leftovers == []
 
 
-def test_failure_leaves_previous_run_fully_intact_not_mixed(tmp_path: Path) -> None:
+def test_failure_leaves_previous_run_fully_intact_not_mixed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     dest = tmp_path / "report"
     old_files = {"index.html": "<html>OLD</html>", "a.csv": "old\n1\n", "b.csv": "old\n2\n"}
     write_artifact_set(dest, old_files)
@@ -101,12 +102,10 @@ def test_failure_leaves_previous_run_fully_intact_not_mixed(tmp_path: Path) -> N
             raise Boom("simulated crash between file writes")
         return real_write_text(self, data, *args, **kwargs)
 
-    Path.write_text = flaky_write_text
-    try:
-        with pytest.raises(Boom):
-            write_artifact_set(dest, new_files)
-    finally:
-        Path.write_text = real_write_text
+    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+    with pytest.raises(Boom):
+        write_artifact_set(dest, new_files)
 
     # The previous, complete run must be fully intact -- never a mixture
     # of old and new content.
