@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from jlab.cli import _discord
+from jlab.links.extract import extract_links
 from jlab.members.aggregate import aggregate
 
 # ---------------------------------------------------------------------------
@@ -37,7 +38,8 @@ from jlab.members.aggregate import aggregate
 # ---------------------------------------------------------------------------
 
 # The surfaces named in the task: the adapter, the members pipeline modules,
-# and the discord verb (command) module.
+# the discord verb (command) module, and (t12) the links pipeline modules
+# plus the shared csv/atomic-writeset primitives they build on.
 _GUARDED_FILES = (
     "jlab/cli/_discord.py",
     "jlab/members/aggregate.py",
@@ -45,6 +47,12 @@ _GUARDED_FILES = (
     "jlab/members/report.py",
     "jlab/members/paths.py",
     "jlab/cli/_commands/discord.py",
+    "jlab/links/extract.py",
+    "jlab/links/report.py",
+    "jlab/links/cache.py",
+    "jlab/links/paths.py",
+    "jlab/csv_export.py",
+    "jlab/atomic_writeset.py",
 )
 
 # Call-shaped patterns only — a dotted-attribute call, or a `..._message(`
@@ -295,3 +303,76 @@ def test_private_channel_contributes_nothing_to_member_statistics(
     assert author_ids == [_PUBLIC_AUTHOR_ID]
     assert _PRIVATE_AUTHOR_ID not in author_ids
     assert _PRIVATE_AUTHOR_NAME not in json.dumps(agg)
+
+
+# ---------------------------------------------------------------------------
+# 3. (t12) Public-only, links pipeline: a private channel contributes nothing
+#    to a links run, and its URL never leaks into the extraction output.
+# ---------------------------------------------------------------------------
+
+_PRIVATE_LINKS_CHANNEL_NAME = "staff-only-private-links"
+_PRIVATE_LINKS_AUTHOR_ID = "priv-links-author-id-999"
+_PRIVATE_LINKS_URL = "https://private.example/secret-doc"
+
+_PUBLIC_LINKS_CHANNEL_NAME = "links-general"
+_PUBLIC_LINKS_AUTHOR_ID = "pub-links-author-id-1"
+_PUBLIC_LINKS_URL = "https://public.example/shared-doc"
+
+
+def test_private_channel_contributes_nothing_to_links_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A private channel's messages (and their URLs) never reach link extraction.
+
+    Mirrors ``test_private_channel_contributes_nothing_to_member_statistics``
+    but drives the real :func:`jlab.links.extract.extract_links` instead of
+    the members aggregate. The private channel's ``history()`` still raises
+    if ever called, proving the filtering happens before any fetch; and the
+    private channel carries its own distinctive URL so the assertions check
+    an actual leak, not merely a name match.
+    """
+    now = datetime.now(timezone.utc)
+    public_messages = [
+        _FakeMsg(
+            "lm1",
+            _FakeAuthor(_PUBLIC_LINKS_AUTHOR_ID, "pub-links-author-name"),
+            f"check this out {_PUBLIC_LINKS_URL}",
+            now - timedelta(minutes=5),
+        ),
+    ]
+    guild = _FakeGuild(
+        [
+            _PublicChannel("lc1", _PUBLIC_LINKS_CHANNEL_NAME, public_messages),
+            _PrivateChannelMustNotBeFetched("lc2", _PRIVATE_LINKS_CHANNEL_NAME),
+        ]
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    # Drives the REAL scan_window. If the private channel's filtering were a
+    # post-filter instead of a pre-fetch exclusion, this call would raise
+    # AssertionError from _PrivateChannelMustNotBeFetched.history() before we
+    # ever reach the assertions below.
+    scan_result = _discord.scan_window(123, since_days=30)
+
+    # The scan itself never touched the private channel.
+    assert scan_result["scanned_text_channels"] == 1
+    assert [c["name"] for c in scan_result["channels"]] == [_PUBLIC_LINKS_CHANNEL_NAME]
+    scan_json = json.dumps(scan_result)
+    assert _PRIVATE_LINKS_CHANNEL_NAME not in scan_json
+    assert _PRIVATE_LINKS_URL not in scan_json
+
+    records = extract_links(scan_result)
+    records_json = json.dumps(records)
+
+    # The private channel's name never reaches the extraction output.
+    assert _PRIVATE_LINKS_CHANNEL_NAME not in records_json
+    # Its (hypothetical) author never appears among the extracted records —
+    # there is exactly one record, and it is the public-channel author/url.
+    author_ids = [r["author_id"] for r in records]
+    assert author_ids == [_PUBLIC_LINKS_AUTHOR_ID]
+    assert _PRIVATE_LINKS_AUTHOR_ID not in author_ids
+    # Positive leak check: the private channel's distinctive URL is absent
+    # from the extraction output entirely, not just its channel name.
+    urls = [r["url"] for r in records]
+    assert urls == [_PUBLIC_LINKS_URL]
+    assert _PRIVATE_LINKS_URL not in records_json
