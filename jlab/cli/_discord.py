@@ -199,15 +199,103 @@ def _serialize_author(author: Any) -> dict:
     }
 
 
-def _serialize_message(message: Any) -> dict:
-    """Serialize a discord.py ``Message`` to a plain dict (no objects escape)."""
+def _serialize_attachment(attachment: Any) -> dict:
+    """Serialize an ``Attachment`` — the URL is the point; the rest is context."""
+    attachment_id = getattr(attachment, "id", None)
+    return {
+        "id": str(attachment_id) if attachment_id is not None else None,
+        "filename": getattr(attachment, "filename", None),
+        "url": getattr(attachment, "url", None),
+        "content_type": getattr(attachment, "content_type", None),
+        "size": getattr(attachment, "size", None),
+    }
+
+
+def _serialize_embed_field(field: Any) -> dict:
+    """Serialize one embed field (``name``/``value``); values carry links."""
+    return {"name": getattr(field, "name", None), "value": getattr(field, "value", None)}
+
+
+def _serialize_embed(embed: Any) -> dict:
+    """Serialize an ``Embed`` — url **and** body.
+
+    Carrying only ``url`` would lose most links: a live probe found that
+    ``type=rich`` embeds have ``url is None`` and keep their links inside the
+    description / field values, while ``type=link``/``type=article`` embeds do
+    carry a ``url`` — but one that merely duplicates a URL already present in
+    ``message.content``. The body is therefore the load-bearing part.
+    """
+    fields = getattr(embed, "fields", None) or []
+    return {
+        "type": str(getattr(embed, "type", None)) if getattr(embed, "type", None) else None,
+        "url": getattr(embed, "url", None),
+        "title": getattr(embed, "title", None),
+        "description": getattr(embed, "description", None),
+        "fields": [_serialize_embed_field(f) for f in fields],
+    }
+
+
+def _serialize_channel_ref(channel: Any) -> dict:
+    """An ``{id, name}`` reference to a channel, or ``{}`` when there is none.
+
+    Empty means *absent*, never a placeholder string: a consumer branches on
+    truthiness and is never handed a fabricated identity.
+    """
+    if channel is None:
+        return {}
+    channel_id = getattr(channel, "id", None)
+    return {
+        "id": str(channel_id) if channel_id is not None else None,
+        "name": getattr(channel, "name", None),
+    }
+
+
+def _jump_url(message: Any, channel: Any) -> str | None:
+    """The message's jump link, or ``None`` — never a fabricated one.
+
+    discord.py exposes ``Message.jump_url`` directly. The fallback builds the
+    canonical link from guild/channel/message ids when they are all available,
+    and gives up (``None``) when they are not.
+    """
+    url = getattr(message, "jump_url", None)
+    if url:
+        return str(url)
+    channel = channel if channel is not None else getattr(message, "channel", None)
+    guild_id = getattr(getattr(channel, "guild", None), "id", None)
+    channel_id = getattr(channel, "id", None)
+    message_id = getattr(message, "id", None)
+    if guild_id is None or channel_id is None or message_id is None:
+        return None
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+def _serialize_message(message: Any, channel: Any = None) -> dict:
+    """Serialize a discord.py ``Message`` to a plain dict (no objects escape).
+
+    *channel* is the enclosing channel, threaded down from the caller so each
+    record can name where it was posted (``read_messages`` and
+    ``_probe_channel`` both hold it); it falls back to ``message.channel``.
+
+    Keys are only ever **added** here — ``id``/``author``/``content``/
+    ``created_at`` keep their names and meaning, so existing ``--json``
+    consumers of ``channels``/``read``/``active`` are unaffected.
+    """
     message_id = getattr(message, "id", None)
     created = getattr(message, "created_at", None)
+    channel = channel if channel is not None else getattr(message, "channel", None)
+    thread = getattr(message, "thread", None)
     return {
         "id": str(message_id) if message_id is not None else None,
         "author": _serialize_author(message.author),
         "content": message.content,
         "created_at": created.isoformat() if created else None,
+        "channel": _serialize_channel_ref(channel),
+        "jump_url": _jump_url(message, channel),
+        "attachments": [
+            _serialize_attachment(a) for a in getattr(message, "attachments", None) or []
+        ],
+        "embeds": [_serialize_embed(e) for e in getattr(message, "embeds", None) or []],
+        "thread": _serialize_channel_ref(thread),
     }
 
 
@@ -342,7 +430,7 @@ def read_messages(channel_id: int, limit: int = 20) -> list[dict]:
         channel = await client.fetch_channel(channel_id)
         collected = [m async for m in channel.history(limit=limit)]
         collected.reverse()  # history yields newest-first; emit oldest-first
-        return [_serialize_message(m) for m in collected]
+        return [_serialize_message(m, channel) for m in collected]
 
     return _run(action)
 
@@ -430,7 +518,7 @@ async def _probe_channel(
         except Exception as exc:  # noqa: BLE001
             return _channel_row(channel, [], STATUS_FAILED, f"read failed: {exc}", False)
 
-    messages = [_serialize_message(m) for m in _ordered(raw)]
+    messages = [_serialize_message(m, channel) for m in _ordered(raw)]
     if exclude_bots:
         messages = [m for m in messages if not m["author"]["bot"]]
     status = STATUS_OK if complete else STATUS_PARTIAL
