@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-05T04:06:47Z",
-  "updated": "2026-09-05T05:50:48Z",
+  "updated": "2026-09-05T06:45:38Z",
   "claims": [
     {
       "id": "c1",
@@ -1094,5 +1094,132 @@
       "status": "approved"
     }
   ],
-  "obligations": []
+  "obligations": [
+    {
+      "id": "o1",
+      "claim_id": "c1",
+      "seam": "jlab discord links, one invocation",
+      "behavior": "a single run with no flags writes an HTML report and CSVs and prints the path",
+      "source_text": "jlab discord links extracts every URL shared in the Jetson AI Lab Discord's public channels over the last 90 days and renders a local, gitignored HTML report of what the community is sharing",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o2",
+      "claim_id": "c32",
+      "seam": "--json containment",
+      "behavior": "--json emits the id-only extraction and never reaches name resolution or a file write, under any flag combination",
+      "source_text": "--json is strictly id-only, exactly as the members verb does it: it emits the extraction stage with author ids, urls, channels, timestamps, thread references and jump links, resolves no display names, writes no files, and has no opt-in flag that changes this. Names are produced by a separate call that fetches them from ids \u2014 the unchanged jlab/members/resolve.py batch (guild.fetch_member over a second Discord session), invoked only on the render path immediately before the HTML and CSVs are written. --json returns before that call is ever reached.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o3",
+      "claim_id": "c37",
+      "seam": "departed-author retention",
+      "behavior": "a link whose author left the guild stays in the report with its bare id and no display name",
+      "source_text": "The links render path must NOT filter rows by resolve_result.included_author_ids the way jlab/cli/_commands/discord.py:172-175 does. A departed poster's link stays in the report carrying its bare author id, with no display name resolved; the author column shows the id. Dropping the row would delete a link because of something that happened to its poster after the share.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o4",
+      "claim_id": "c11",
+      "seam": "URL rendering",
+      "behavior": "hostile URL schemes are refused as hrefs and render as inert escaped text",
+      "source_text": "Rendered URLs are a NEW attack surface the members report never had, because links are href-shaped. Hostile schemes (javascript:, data:) must be neutralised and every URL HTML-escaped; the report stays self-contained with no script and no external fetch.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o5",
+      "claim_id": "c33",
+      "seam": "CSV formula injection",
+      "behavior": "a field starting with = + - @ TAB or CR is prefix-escaped and opens as inert text",
+      "source_text": "CSV output needs its own injection defence, which no existing code provides. jlab/members/report.py's only sanitiser is _esc, which is html.escape(quote=True) \u2014 HTML context only. A CSV field beginning with =, +, -, @, tab or carriage return is executed as a formula by Excel and Google Sheets on open, and both a shared URL and a resolved display name are attacker-controlled text landing in exactly that position. c22's whole rationale is that a maintainer opens these in a spreadsheet, which is precisely the execution context.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o6",
+      "claim_id": "c35",
+      "seam": "artifact-set atomicity",
+      "behavior": "a killed write leaves a complete artifact set or nothing, never a mismatched pair",
+      "source_text": "Writing the artifact set must be all-or-nothing. jlab/members/report.py:405 is a bare path.write_text(html) \u2014 fine when the output is one file, but c22 and c25 turn it into an HTML file plus N CSVs written in sequence. A run killed partway (Ctrl-C, a 429 storm, an OOM) leaves a directory holding some artifacts from this run and possibly stale ones from the last, with no marker distinguishing them, and the timestamps will look plausible.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o7",
+      "claim_id": "c16",
+      "seam": "four-source extraction",
+      "behavior": "URLs are extracted from content, attachments, embed urls and embed bodies, deduped per message",
+      "source_text": "URLs are extracted from four sources, all deduped against each other: message.content by regex; attachments[].url; embeds[].url; and the bodies of embeds \u2014 description and field values \u2014 by the same regex. The fourth source exists because the t1 probe measured that link/article embeds carry a url duplicating one already in content, while rich embeds carry url=None and hide their links in description and fields. None of these are available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of them \u2014 so the extractor depends on the seam extension in c18.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o8",
+      "claim_id": "c42",
+      "seam": "ephemeral attachment URLs",
+      "behavior": "attachment URLs are marked expiring and never rendered as clickable anchors, with the jump link beside them",
+      "source_text": "Attachment URLs are kept but presented as EPHEMERAL, with the jump link as the durable pointer. The t1 probe measured them expiring 14-22 hours from fetch, independent of message age, because the signature is minted at fetch time \u2014 so the report must say on its face that an attachment URL expires within about a day rather than presenting it as a stable link. Re-running the scan mints fresh signatures, which is what makes the cache in c40 a partial answer only: a cache-rendered report's attachment URLs are as stale as the cache.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o9",
+      "claim_id": "c40",
+      "seam": "cache regeneration",
+      "behavior": "a cached run re-renders without a Discord scan and states the same coverage as the run that wrote it",
+      "source_text": "The report and CSVs must be regenerable without a second full scan. One 90-day sweep costs a large share of a bot token shared with other mesh agents (v1), so the extraction stage's output is persisted to the contained report directory and the render stage can run from that cache instead of re-scanning. This is the same id-only payload --json emits (c32), so the cache carries author ids, urls, channels, timestamps, thread references and jump links \u2014 and no display names, making it a strictly smaller privacy surface than the CSVs sitting beside it. It lives in the same repo-anchored gitignored directory and is covered by the same ignore rule; name resolution still happens only on the render path.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o10",
+      "claim_id": "c7",
+      "seam": "public-only, pre-fetch",
+      "behavior": "a private channel is never fetched and contributes no name, id or URL to the output",
+      "source_text": "Public-only stays absolute and stays a PRE-fetch filter. _public_text_channels (jlab/cli/_discord.py:455-467) drops private channels before any history() call, so no private channel's URLs can ever be fetched, let alone rendered.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o11",
+      "claim_id": "c6",
+      "seam": "read-only",
+      "behavior": "no write-shaped Discord call exists in any links or members module",
+      "source_text": "Read-only stays absolute. The links path adds no post/react/thread/edit call; its new modules must be added to the _GUARDED_FILES list in tests/test_members_invariants.py:41-48 so the existing write-call regex guard covers them too.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o12",
+      "claim_id": "c34",
+      "seam": "CSV self-describing coverage",
+      "behavior": "a reader with only a CSV can see the window and whether any channel was partial or failed",
+      "source_text": "The CSVs must carry their own coverage metadata. h10 binds the coverage figures to the report, but a CSV has no metadata block and is the artifact most likely to be opened, mailed, or imported on its own. A partial sweep (scan_window's STATUS_PARTIAL, or the max_messages_per_channel cap of 5000 at jlab/cli/_discord.py:48) would then present as a complete dataset with nothing on the face of it saying otherwise.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o13",
+      "claim_id": "c12",
+      "seam": "no verdict",
+      "behavior": "the rendered report contains no ranking or recommendation language",
+      "source_text": "The CLI issues no verdict about links either. No 'most shared', 'top domain', or 'recommended reading' ranking \u2014 it organizes what was shared and leaves the judgement to the human or agent reading it, matching the house rule at docs/specs/2026-09-04-jlab-discord-members-report.md:96-97.",
+      "origin": "llm",
+      "status": "approved"
+    },
+    {
+      "id": "o14",
+      "claim_id": "c38",
+      "seam": "flat, spreadsheet-loadable CSV",
+      "behavior": "the canonical CSV is one row per share with every cell a scalar",
+      "source_text": "The canonical CSV is FLAT: one row per share, every cell atomic, no nested lists \u2014 so it loads directly into Google Sheets and into pandas without parsing. A second, deduped per-URL summary CSV is derived from that flat table (share count, first and last seen, channels touched) rather than by complicating the extraction model.",
+      "origin": "llm",
+      "status": "approved"
+    }
+  ]
 }

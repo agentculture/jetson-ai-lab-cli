@@ -5,7 +5,7 @@
   "schema_version": 5,
   "status": "exported",
   "created": "2026-09-05T05:21:14Z",
-  "updated": "2026-09-05T05:51:13Z",
+  "updated": "2026-09-05T06:44:23Z",
   "targets": [
     {
       "id": "c1",
@@ -812,6 +812,44 @@
       ],
       "covers": [],
       "instruction": "Files: pyproject.toml, CHANGELOG.md. Use the version-bump skill \u2014 it updates both. Minor bump: this adds a verb and a shared capability. Last task before the PR."
+    },
+    {
+      "id": "t15",
+      "summary": "Per-run subdirectory layout for report artifacts, wired through the atomic writer (supersedes t7)",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Each run writes its artifacts into its own subdirectory under the verb's report directory, so the whole set for one run is swapped into place by a single os.replace and no sibling run is ever deleted",
+        "The members HTML and its CSV are written through jlab/atomic_writeset.write_artifact_set \u2014 killing the write partway leaves either a complete set or no new artifacts, never a complete CSV beside a missing or stale HTML",
+        "A previous run's directory survives a failed later run fully intact, and parallel calls under pytest -n auto do not clobber each other",
+        "git check-ignore still succeeds on every path written, asserted by enumerating actual filenames under the new layout",
+        "The traversal guard still holds: neither a filename nor a run id containing path separators or .. can escape the report directory"
+      ],
+      "deps": [
+        "t5"
+      ],
+      "covers": [
+        "c35",
+        "h31"
+      ],
+      "instruction": "Files: jlab/members/paths.py, jlab/links/paths.py, jlab/members/report.py, tests/test_members_paths.py, tests/test_links_paths.py, tests/test_members_report.py. Supersedes t7, whose branch is NOT merged \u2014 reuse its CSV column design (it was sound) but replace its two-sequential-writes mechanism. Run ids must be sanitised like filenames; the traversal guard applies to them too."
+    },
+    {
+      "id": "t16",
+      "summary": "Cache the scan's coverage fields so a cache-rendered report states its real coverage (closes d3)",
+      "origin": "user",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "write_cache persists the scan's per-channel coverage fields alongside the records, and load_cache returns them",
+        "A --from-cache render shows the SAME coverage figures as the run that wrote the cache \u2014 no 'unknown' cells, no invented numbers",
+        "An older cache written without coverage fields still loads, rendering coverage as unknown rather than raising",
+        "The cache still carries author ids only and no display names"
+      ],
+      "deps": [
+        "t10"
+      ],
+      "covers": [],
+      "instruction": "Files: jlab/links/cache.py, jlab/cli/_commands/discord.py, tests/test_links_cache.py, tests/test_links_cli.py. Both files are now merged so you own both ends. Keep the payload backward-compatible: a cache lacking the coverage key must still load."
     }
   ],
   "risks": [
@@ -844,6 +882,46 @@
       "text": "Link liveness is unexamined: nothing verifies a shared URL still resolves, and t1 may find attachment URLs expire within a day. If it does, a large fraction of the report's rows are dead on arrival and the feature's value drops materially \u2014 but discovering that is t1's job, before the extractor is built.",
       "kind": "unknown_nonblocking",
       "task_id": "t1",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r5",
+      "text": "Doc drift outside t2's file ownership: jlab/members/aggregate.py's module docstring asserts the serialized message shape 'carries only {id, author, content, created_at} \u2014 no reply-to / thread-parent field', and uses that premise to justify naming its heuristic question_starts rather than thread_starts. t2 made that premise stale \u2014 messages now carry a real thread reference. The heuristic itself stays honest (message.thread is a thread started here; a reply/reference field is still absent), so the name can stand, but the docstring must be corrected by whoever owns that file. Reported by the t2 agent, deliberately not fixed there.",
+      "kind": "follow_up",
+      "task_id": "t13",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r6",
+      "text": "The read-only isolation guard test_upstream_workaround_is_isolated_to_the_adapter greps for the literal substrings author.bot / global_name / .history( across jlab/, so it fires on PROSE as well as code. t6 hit this with a docstring that merely described bot exclusion and reworded it to pass. No usage was hidden \u2014 extract.py genuinely does not touch author.bot, it relies on scan_window's filter \u2014 but the guard's own comment says the honest fix for a false positive is an explicit exemption, not rewording, because rewording 'hides the usage from this guard entirely and makes the code worse'. A prose-sensitive guard will keep costing this.",
+      "kind": "follow_up",
+      "task_id": "t12",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r7",
+      "text": "Stale help text created by t15/t7's CSV work: the members subparser help in jlab/cli/_commands/discord.py still reads 'Scan participation and write an id-only members HTML report'. The verb now writes an HTML report AND a CSV, into a per-run subdirectory. The explain catalog entry for ('discord','members') may carry the same staleness. t10 owns that file and should correct both while it is in there.",
+      "kind": "follow_up",
+      "task_id": "t10",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r8",
+      "text": "Three doc sites now misdescribe the members verb after d1's layout change and the CSV addition. README.md:82 'writes an HTML report'; jlab/explain/catalog.py:220 'write an HTML report'; CLAUDE.md:65 'writes a gitignored HTML report to a fixed, repo-relative path'. The last is outright wrong now \u2014 the path is a per-run subdirectory, not fixed. t11 owns catalog.py and t13 owns README/CLAUDE.md; each must correct its own file rather than leaving the sibling verb's documentation describing behaviour that changed underneath it.",
+      "kind": "follow_up",
+      "task_id": "t13",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r9",
+      "text": "h33's spreadsheet-loadability claim is only half verified. tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv is SKIPPED because pandas is not a dev dependency, and nothing has ever opened a generated CSV in Excel, LibreOffice or Google Sheets. The scalar-cell and csv.reader halves pass. Since the user's stated purpose for these CSVs is Google Drive and Python processing, this is the acceptance criterion closest to the actual use and the least verified. Closing it means adding pandas to the dev group, or opening one generated file by hand once.",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
       "resolved": false,
       "resolution": ""
     }

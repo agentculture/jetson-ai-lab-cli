@@ -1,0 +1,394 @@
+{
+  "plan_slug": "jlab-discord-links-report",
+  "schema_version": 2,
+  "created": "2026-09-05T06:08:17Z",
+  "updated": "2026-09-05T06:45:39Z",
+  "deviations": [
+    {
+      "id": "d1",
+      "what": "Report artifacts move to one subdirectory PER RUN \u2014 data/reports/<verb>/<run-id>/ \u2014 instead of loose files in a shared flat directory. t5 built write_artifact_set to replace an entire destination directory, which is the correct primitive only if that directory belongs to a single run. t7 discovered the mismatch (a shared flat directory legitimately holds sibling reports, and a directory-level swap would delete them, with a race under pytest -n auto) and fell back to two unprotected sequential writes \u2014 which is precisely the hazard h31 forbids: a complete CSV beside a missing or stale HTML. The user chose the per-run subdirectory layout, which makes t5's single os.replace genuinely atomic as built rather than weakening the guarantee.",
+      "task_ref": "t7",
+      "reason": "t5's API and the shared-directory layout are incompatible; t7's fallback silently dropped the all-or-nothing guarantee that c35/h31 requires. Per-run subdirectories resolve it in favour of the guarantee instead of against it.",
+      "affects": [
+        "t3",
+        "t5",
+        "t7",
+        "t8",
+        "t9"
+      ],
+      "origin": "user",
+      "status": "approved",
+      "classification": "needs-follow-up",
+      "seq": 1
+    },
+    {
+      "id": "d2",
+      "what": "The links extraction cache is written to a SIBLING run directory named <run-id>-cache, not into the run's own report directory. write_artifact_set replaces its entire destination directory with exactly the file set it is handed, so the report set (HTML + 2 CSVs) and the cache cannot share one run directory \u2014 whichever wrote second would delete the first. t10 could not extend jlab/links/cache.py (t9's file), so it added a module-level _cache_run_id() helper in the CLI instead. --from-cache accepts either spelling.",
+      "task_ref": "t10",
+      "reason": "d1's per-run-directory layout makes write_artifact_set atomic, but it also means one directory holds exactly one artifact set. The cache is a second set. Neither t9 nor t10 owned both files needed to resolve it cleanly.",
+      "affects": [
+        "t9",
+        "t10"
+      ],
+      "origin": "user",
+      "status": "approved",
+      "classification": "needs-follow-up",
+      "seq": 2
+    },
+    {
+      "id": "d3",
+      "what": "A cache-rendered links report carries NO coverage figures. write_cache's payload is {scanned_at, records} \u2014 the scan's per-channel ok/partial/failed statuses are not in it. t10 passes a minimal scan_result so the metadata renders coverage as 'unknown' and says coverage is incomplete, rather than inventing numbers. This diverges from t9's acceptance line 'rendering from the cache produces the same report and CSVs as the run that wrote it': the link rows and tables are identical, the coverage cells are not.",
+      "task_ref": "t9",
+      "reason": "The gap was discovered wiring the two together; closing it requires caching the coverage fields alongside the records, which is a change in jlab/links/cache.py \u2014 a file t10 did not own.",
+      "affects": [
+        "t9",
+        "t10"
+      ],
+      "origin": "user",
+      "status": "approved",
+      "classification": "needs-follow-up",
+      "seq": 3
+    }
+  ],
+  "evidence": [
+    {
+      "id": "e1",
+      "obligation_ref": "o1",
+      "test_ref": "tests/test_links_cli.py::test_discord_links_one_invocation_writes_html_and_csvs",
+      "behavior_text": "drives main(['discord','links']) end to end and asserts the HTML and both CSVs exist and the path is printed",
+      "contract_text": "one invocation produces both artifacts with no second command",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 4
+    },
+    {
+      "id": "e2",
+      "obligation_ref": "o2",
+      "test_ref": "tests/test_links_cli.py::test_discord_links_json_is_id_only",
+      "behavior_text": "parametrized across five flag combinations with resolve_authors, write_report and write_cache patched to raise; asserts the seven id-only fields and that no display name reaches stdout",
+      "contract_text": "--json is id-only under every flag combination, with no opt-in that changes it",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit; the guard is a raising fake, so reaching resolution would fail loudly",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 5
+    },
+    {
+      "id": "e3",
+      "obligation_ref": "o3",
+      "test_ref": "tests/test_links_cli.py::test_departed_author_keeps_their_link",
+      "behavior_text": "fakes a guild whose fetch_member raises NotFound, runs the real resolve_authors and real write_report, reads HTML and CSV back; both rows survive and the departed id renders bare",
+      "contract_text": "a departed author's link is kept with its id and no name; the members row filter is not applied",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 6
+    },
+    {
+      "id": "e4",
+      "obligation_ref": "o4",
+      "test_ref": "tests/test_links_report.py::test_only_http_and_https_urls_become_anchors",
+      "behavior_text": "asserts javascript:, data:, control-character-smuggled and scheme-relative URLs never become hrefs and render as inert escaped text",
+      "contract_text": "hostile URL schemes are refused as hrefs",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit, alongside the javascript:/data:/embedded-HTML cases",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 7
+    },
+    {
+      "id": "e5",
+      "obligation_ref": "o6",
+      "test_ref": "tests/test_links_report.py::test_a_killed_write_leaves_no_partial_set",
+      "behavior_text": "injects an exception mid-write and asserts the destination holds a complete set or nothing; a sibling test counts exactly one os.replace",
+      "contract_text": "a killed write never leaves a complete HTML beside missing or stale CSVs",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 8
+    },
+    {
+      "id": "e6",
+      "obligation_ref": "o8",
+      "test_ref": "tests/test_links_report.py::test_attachment_url_is_never_rendered_as_a_clickable_link",
+      "behavior_text": "asserts an attachment URL renders as marked-expiring text with no anchor, and the jump link sits in the same row",
+      "contract_text": "attachment URLs are marked ephemeral with the jump link as the durable pointer",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit, alongside the both-CSVs expiry-marking test",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 9
+    },
+    {
+      "id": "e7",
+      "obligation_ref": "o9",
+      "test_ref": "tests/test_links_cli.py::test_links_from_cache_render_matches_original_coverage_columns",
+      "behavior_text": "captures a fresh run's CSV coverage columns, monkeypatches scan_window to raise, re-renders from cache, asserts the coverage columns are identical with no unknown cells",
+      "contract_text": "a cached re-render states the same coverage as the run that wrote it, without a Discord scan",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit; scan_window raising proves no scan occurred",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 10
+    },
+    {
+      "id": "e8",
+      "obligation_ref": "o10",
+      "test_ref": "tests/test_members_invariants.py::test_private_channel_contributes_nothing_to_links_extraction",
+      "behavior_text": "private channel's history() raises if called; drives real scan_window and real extract_links; asserts the channel name, author id and a distinctive private URL are absent from both outputs",
+      "contract_text": "a private channel is never fetched and leaks nothing into the links output",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit; the leak check names the literal URL, not just the channel",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 11
+    },
+    {
+      "id": "e9",
+      "obligation_ref": "o11",
+      "test_ref": "tests/test_members_invariants.py::test_no_discord_write_calls_anywhere_in_members_code_paths",
+      "behavior_text": "greps every guarded file for write-shaped calls; the links modules are in _GUARDED_FILES and the guard was sabotage-verified by adding a .send( and observing failure",
+      "contract_text": "no write path exists in any links or members module",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit AND was confirmed to fail when sabotaged",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 12
+    },
+    {
+      "id": "e10",
+      "obligation_ref": "o12",
+      "test_ref": "tests/test_links_report.py::test_a_reader_with_only_a_csv_can_see_the_window_and_the_gaps",
+      "behavior_text": "asserts both CSVs carry window and channel ok/partial/failed columns on every row",
+      "contract_text": "a CSV read alone states its window and whether the sweep was incomplete",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 13
+    },
+    {
+      "id": "e11",
+      "obligation_ref": "o13",
+      "test_ref": "tests/test_links_report.py::test_no_verdict_language_anywhere_in_the_rendered_output",
+      "behavior_text": "greps the rendered HTML for top/best/most active/most shared/popular/trending/recommended after stripping the explicit disclaimers",
+      "contract_text": "the report issues no verdict",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "behavioral test ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 14
+    },
+    {
+      "id": "e12",
+      "obligation_ref": "o7",
+      "test_ref": "tests/test_links_extract.py",
+      "behavior_text": "41 tests covering the four sources, the content-plus-auto-preview dedupe collapse, rich-embed body-only extraction, one-row-per-share, bot parity and thread grouping",
+      "contract_text": "URLs come from four deduped sources",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "full module ran green at the named commit",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 15
+    },
+    {
+      "id": "e13",
+      "obligation_ref": "o5",
+      "test_ref": "tests/test_csv_export.py",
+      "behavior_text": "asserts each of the six dangerous prefixes is escaped, including a display name starting with = and a URL starting with @, and that non-scalar cells raise",
+      "contract_text": "a field beginning with = + - @ TAB or CR opens as inert text, not a formula",
+      "evidence_type": "automated",
+      "strength": "fidelity",
+      "strength_basis": "PARTIAL: the escaping is asserted on the emitted bytes and via csv.reader round-trip. The honesty condition h29 asked for verification by OPENING a generated CSV in a spreadsheet application; that was never done. The byte-level assertion is a proxy for the spreadsheet behaviour, not a measurement of it.",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 16
+    },
+    {
+      "id": "e14",
+      "obligation_ref": "o14",
+      "test_ref": "tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv",
+      "behavior_text": "would assert a generated CSV loads with a stock pandas.read_csv",
+      "contract_text": "the flat CSV loads with a stock pandas.read_csv and a stock Google Sheets import with no preprocessing",
+      "evidence_type": "automated",
+      "strength": "coverage",
+      "strength_basis": "NOT EXECUTED. The test exists but is skipped: pandas is not a dev dependency in this repo and the implementing agent declined to add one rather than widen the runtime dependency surface. The stdlib csv.reader round-trip carries the scalar-cell half; the pandas half and the Google Sheets half are both unverified. Filed as unchecked, not as passing.",
+      "outcome": "fail",
+      "run": {
+        "timestamp": "2026-09-05T09:43:05+03:00",
+        "commit": "d56e49d"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 17
+    }
+  ],
+  "deltas": [
+    {
+      "id": "b1",
+      "kind": "amended",
+      "behavior_text": "Report artifacts land in a per-run subdirectory (data/reports/<verb>/<run-id>/) instead of loose files in a shared directory. This changes the output path of the already-shipped jlab discord members verb, and is what makes each run's whole set land through a single atomic os.replace.",
+      "caused_by": [
+        "d1"
+      ],
+      "evidence_refs": [
+        "e5"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b2",
+      "kind": "added",
+      "behavior_text": "The links extraction cache is written to a sibling <run-id>-cache directory rather than the run's own, because write_artifact_set replaces its entire destination directory and one run directory therefore holds exactly one artifact set. --from-cache accepts either spelling.",
+      "caused_by": [
+        "d2"
+      ],
+      "evidence_refs": [
+        "e7"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b3",
+      "kind": "amended",
+      "behavior_text": "The cache payload carries a trimmed copy of the scan's six coverage fields alongside the records, so a cached re-render states real coverage instead of unknown. A payload lacking the key still loads and falls back to unknown.",
+      "caused_by": [
+        "d3"
+      ],
+      "evidence_refs": [
+        "e7"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b4",
+      "kind": "added",
+      "behavior_text": "Extraction reads embed description and field bodies as a fourth source, not just embeds[].url. The t1 probe measured that auto-preview embeds duplicate a URL already in content while rich embeds carry url=None and hide links in the body, so embeds[].url alone would have added duplicates and still missed the unreachable links.",
+      "caused_by": [
+        "c41"
+      ],
+      "evidence_refs": [
+        "e12"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    },
+    {
+      "id": "b5",
+      "kind": "added",
+      "behavior_text": "Attachment URLs are never rendered as clickable anchors at all, regardless of scheme \u2014 stronger than the specced 'marked as expiring'. They render as monospace text with an EXPIRING badge and the jump link beside them as the clickable route back.",
+      "caused_by": [
+        "c42"
+      ],
+      "evidence_refs": [
+        "e6"
+      ],
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false
+    }
+  ],
+  "supersessions": []
+}
