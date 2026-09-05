@@ -275,6 +275,60 @@ def flat_rows(
     return rows
 
 
+def _new_summary_entry(url: str) -> dict[str, Any]:
+    """A zeroed accumulator for one distinct address.
+
+    The two underscore-prefixed sets are working state only:
+    :func:`_finish_summary_entry` turns each into its published *count*
+    and removes it, because a CSV cell is a scalar.
+    """
+    return {
+        "url": url,
+        "url_expires": _STABLE,
+        "shares": 0,
+        "first_shared_at": "",
+        "last_shared_at": "",
+        "_channels": set(),
+        "_people": set(),
+        "example_jump_url": "",
+    }
+
+
+def _fold_timestamps_into(entry: dict[str, Any], stamp: Any) -> None:
+    """Widen *entry*'s first/last-seen window to include *stamp*."""
+    if not stamp:
+        return
+    if not entry["first_shared_at"] or stamp < entry["first_shared_at"]:
+        entry["first_shared_at"] = stamp
+    if stamp > entry["last_shared_at"]:
+        entry["last_shared_at"] = stamp
+
+
+def _fold_share_into(entry: dict[str, Any], row: Mapping[str, Any]) -> None:
+    """Account one flat row against its address's accumulator.
+
+    An address counts as ``expiring`` if *any* of its shares was an
+    attachment address, and keeps the first jump link it was offered.
+    """
+    entry["shares"] += 1
+    if row["url_expires"] == _EXPIRING:
+        entry["url_expires"] = _EXPIRING
+    _fold_timestamps_into(entry, row["shared_at"])
+    if row["channel_id"] or row["channel_name"]:
+        entry["_channels"].add((row["channel_id"], row["channel_name"]))
+    if row["author_id"]:
+        entry["_people"].add(row["author_id"])
+    if not entry["example_jump_url"] and row["jump_url"]:
+        entry["example_jump_url"] = row["jump_url"]
+
+
+def _finish_summary_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Replace the working sets with their scalar counts, in place."""
+    entry["channels_touched"] = len(entry.pop("_channels"))
+    entry["people_who_shared_it"] = len(entry.pop("_people"))
+    return entry
+
+
 def summary_rows(flat: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Derive the deduped per-address table **from the flat table**.
 
@@ -291,37 +345,10 @@ def summary_rows(flat: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         url = row["url"]
         entry = grouped.get(url)
         if entry is None:
-            entry = grouped[url] = {
-                "url": url,
-                "url_expires": _STABLE,
-                "shares": 0,
-                "first_shared_at": "",
-                "last_shared_at": "",
-                "_channels": set(),
-                "_people": set(),
-                "example_jump_url": "",
-            }
-        entry["shares"] += 1
-        if row["url_expires"] == _EXPIRING:
-            entry["url_expires"] = _EXPIRING
-        stamp = row["shared_at"]
-        if stamp:
-            if not entry["first_shared_at"] or stamp < entry["first_shared_at"]:
-                entry["first_shared_at"] = stamp
-            if stamp > entry["last_shared_at"]:
-                entry["last_shared_at"] = stamp
-        if row["channel_id"] or row["channel_name"]:
-            entry["_channels"].add((row["channel_id"], row["channel_name"]))
-        if row["author_id"]:
-            entry["_people"].add(row["author_id"])
-        if not entry["example_jump_url"] and row["jump_url"]:
-            entry["example_jump_url"] = row["jump_url"]
+            entry = grouped[url] = _new_summary_entry(url)
+        _fold_share_into(entry, row)
 
-    rows: list[dict[str, Any]] = []
-    for entry in grouped.values():
-        entry["channels_touched"] = len(entry.pop("_channels"))
-        entry["people_who_shared_it"] = len(entry.pop("_people"))
-        rows.append(entry)
+    rows = [_finish_summary_entry(entry) for entry in grouped.values()]
     # Presentation ordering only -- see the visible note the page carries.
     rows.sort(key=lambda row: (row["url"].casefold(), row["url"]))
     return rows
@@ -765,9 +792,16 @@ def write_report(
     Returns the path of the **HTML file inside the run directory**.
     """
     stamp = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    html = render_report(scan_result, records, resolved=resolved, generated_at=stamp)
 
-    flat = flat_rows(records, resolved=resolved)
+    # *records* is only promised to be an Iterable, and three artifacts are
+    # derived from it. Materialise it ONCE, up front, and build all three
+    # from that one reusable sequence: consuming it a second time would
+    # silently empty both CSVs when a caller passes a generator.
+    materialised: list[Mapping[str, Any]] = list(records or [])
+
+    html = render_report(scan_result, materialised, resolved=resolved, generated_at=stamp)
+
+    flat = flat_rows(materialised, resolved=resolved)
     summary = summary_rows(flat)
     coverage = _coverage_cells(scan_result, stamp)
 
