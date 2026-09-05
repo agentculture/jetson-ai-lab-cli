@@ -133,6 +133,7 @@ Public channels only by default (`--all` is the sole private opt-in).
 - `jetson-ai-lab-cli discord read <channel_id> [--limit N]` — read recent messages.
 - `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
 - `jetson-ai-lab-cli discord members [--since DAYS] [--json]` — scan participation statistics.
+- `jetson-ai-lab-cli discord links [--since DAYS] [--json]` — scan shared addresses.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -217,13 +218,13 @@ _DISCORD_MEMBERS = """\
 # jetson-ai-lab-cli discord members
 
 Scan public text channels for participation statistics over a time window and
-write an HTML report — one invocation, no pipeline to assemble. Organizes
-statistics by member without ranking or verdict. The pipeline is anonymous:
-aggregates activity by author ID and resolves names only at render time.
-Bots and members who have left the guild are excluded by default; public
-text channels only.
+write an HTML report plus a CSV into a per-run subdirectory — one invocation,
+no pipeline to assemble. Organizes statistics by member without ranking or
+verdict. The pipeline is anonymous: aggregates activity by author ID and
+resolves names only at render time. Bots and members who have left the guild
+are excluded by default; public text channels only.
 
-`--json` emits the id-only aggregate (no name resolution, no HTML file
+`--json` emits the id-only aggregate (no name resolution, no report files
 written) so display names can never leave via stdout redirection.
 `--include-departed` includes every author regardless of current guild
 membership; the default excludes those who have left. `--since` defaults to
@@ -236,6 +237,39 @@ membership; the default excludes those who have left. `--since` defaults to
     jetson-ai-lab-cli discord members --include-departed
     jetson-ai-lab-cli discord members --concurrency 2
     jetson-ai-lab-cli discord members --json
+"""
+
+_DISCORD_LINKS = """\
+# jetson-ai-lab-cli discord links
+
+Scan public text channels for shared addresses over a time window and write
+one run's HTML report plus its flat and per-address CSVs into a per-run
+subdirectory — one invocation, no pipeline to assemble. The page organizes
+shares; it issues no verdict — nothing is ranked, scored, or labeled.
+
+`--since` defaults to 90 days; `--concurrency` bounds how many channels are
+read in parallel (default 4). `--include-bots` includes bot- and
+webhook-authored shares (the default excludes them). `--from-cache RUN_ID`
+re-renders a previous run's cached extraction without opening a new Discord
+scan; pass the run id from that run's report directory.
+
+`--json` emits the id-only extraction only — no name resolution, and no
+report or cache files written — and that containment has no opt-in: no flag
+combination turns it off.
+
+Discord's attachment-CDN URLs stop resolving roughly 14-22 hours after they
+are fetched, so any address pulled from an attachment renders with a visible
+*expiring* badge and is never made clickable; the durable way back to the
+message is the jump link in the same row, which is always live.
+
+## Usage
+
+    jetson-ai-lab-cli discord links
+    jetson-ai-lab-cli discord links --since 30
+    jetson-ai-lab-cli discord links --include-bots
+    jetson-ai-lab-cli discord links --concurrency 2
+    jetson-ai-lab-cli discord links --from-cache 20260905T101112Z-1a2b3c4d
+    jetson-ai-lab-cli discord links --json
 """
 
 
@@ -257,6 +291,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "read"): _DISCORD_READ,
     ("discord", "active"): _DISCORD_ACTIVE,
     ("discord", "members"): _DISCORD_MEMBERS,
+    ("discord", "links"): _DISCORD_LINKS,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
 }
