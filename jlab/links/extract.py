@@ -179,6 +179,34 @@ def _extract_urls(text: str | None) -> list[str]:
     return found
 
 
+def _record_url(found: dict[str, bool], url: str | None, *, from_attachment: bool = False) -> None:
+    """Merge *url* into *found*, OR-ing in ``from_attachment`` on collision."""
+    if not url:
+        return
+    if from_attachment or url not in found:
+        found[url] = found.get(url, False) or from_attachment
+
+
+def _collect_content_urls(message: dict, found: dict[str, bool]) -> None:
+    for url in _extract_urls(message.get("content")):
+        _record_url(found, url)
+
+
+def _collect_attachment_urls(message: dict, found: dict[str, bool]) -> None:
+    for attachment in message.get("attachments") or []:
+        _record_url(found, attachment.get("url"), from_attachment=True)
+
+
+def _collect_embed_urls(message: dict, found: dict[str, bool]) -> None:
+    for embed in message.get("embeds") or []:
+        _record_url(found, embed.get("url"))
+        for url in _extract_urls(embed.get("description")):
+            _record_url(found, url)
+        for field in embed.get("fields") or []:
+            for url in _extract_urls(field.get("value")):
+                _record_url(found, url)
+
+
 def _urls_in_message(message: dict) -> dict[str, bool]:
     """Return ``{url: from_attachment}`` for every deduped URL in *message*.
 
@@ -188,27 +216,9 @@ def _urls_in_message(message: dict) -> dict[str, bool]:
     attachment, even if the same URL also appears elsewhere in the message.
     """
     found: dict[str, bool] = {}
-
-    def add(url: str | None, *, from_attachment: bool = False) -> None:
-        if not url:
-            return
-        if from_attachment or url not in found:
-            found[url] = found.get(url, False) or from_attachment
-
-    for url in _extract_urls(message.get("content")):
-        add(url)
-
-    for attachment in message.get("attachments") or []:
-        add(attachment.get("url"), from_attachment=True)
-
-    for embed in message.get("embeds") or []:
-        add(embed.get("url"))
-        for url in _extract_urls(embed.get("description")):
-            add(url)
-        for field in embed.get("fields") or []:
-            for url in _extract_urls(field.get("value")):
-                add(url)
-
+    _collect_content_urls(message, found)
+    _collect_attachment_urls(message, found)
+    _collect_embed_urls(message, found)
     return found
 
 
@@ -218,6 +228,34 @@ def _sort_key(record: dict[str, Any]) -> tuple:
         (record.get("channel") or {}).get("id") or "",
         record["url"],
     )
+
+
+def _eligible_author_id(message: dict, include_bots: bool) -> Any:
+    """Return the message's ``author.id``, or ``None`` if it should be skipped.
+
+    Skipped when the author is a bot and ``include_bots`` is false, or when
+    there is no resolvable id to attribute a share to at all.
+    """
+    author = message.get("author") or {}
+    if not include_bots and author.get("bot"):
+        return None
+    return author.get("id")
+
+
+def _records_for_message(message: dict, author_id: Any) -> list[dict]:
+    """Build one output record per deduped URL found in *message*."""
+    return [
+        {
+            "url": url,
+            "channel": message.get("channel") or {},
+            "timestamp": message.get("created_at"),
+            "thread": message.get("thread") or {},
+            "author_id": author_id,
+            "jump_url": message.get("jump_url"),
+            "from_attachment": from_attachment,
+        }
+        for url, from_attachment in _urls_in_message(message).items()
+    ]
 
 
 def extract_links(scan_result: dict, *, include_bots: bool = False) -> list[dict]:
@@ -237,25 +275,10 @@ def extract_links(scan_result: dict, *, include_bots: bool = False) -> list[dict
 
     for channel in scan_result.get("channels", []):
         for message in channel.get("messages", []):
-            author = message.get("author") or {}
-            if not include_bots and author.get("bot"):
-                continue
-            author_id = author.get("id")
+            author_id = _eligible_author_id(message, include_bots)
             if author_id is None:
                 continue
-
-            for url, from_attachment in _urls_in_message(message).items():
-                records.append(
-                    {
-                        "url": url,
-                        "channel": message.get("channel") or {},
-                        "timestamp": message.get("created_at"),
-                        "thread": message.get("thread") or {},
-                        "author_id": author_id,
-                        "jump_url": message.get("jump_url"),
-                        "from_attachment": from_attachment,
-                    }
-                )
+            records.extend(_records_for_message(message, author_id))
 
     records.sort(key=_sort_key)
     return records
