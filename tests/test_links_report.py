@@ -259,6 +259,41 @@ def test_summary_csv_matches_the_derived_summary_rows():
         shutil.rmtree(path.parent, ignore_errors=True)
 
 
+def test_a_one_shot_generator_of_records_reaches_all_three_artifacts():
+    """``write_report`` must consume *records* once, not twice.
+
+    Annotated as ``Iterable``, it was traversed a second time to build the
+    CSV rows: a one-shot generator produced an HTML page full of shares
+    beside two empty CSVs, silently.
+    """
+    records = (record for record in _records())
+
+    path = write_report(_scan(), records, filename="t8-generator.html")
+    try:
+        html = path.read_text(encoding="utf-8")
+        flat = _read_csv(path.with_suffix(".csv"))
+        summary = _read_csv(path.parent / "t8-generator-summary.csv")
+
+        assert len(flat) == 1 + 3, f"flat CSV lost rows: {flat}"
+        assert len(summary) == 1 + 2, f"summary CSV lost rows: {summary}"
+
+        url_column = list(FLAT_CSV_HEADER).index("url")
+        flat_urls = sorted(row[url_column] for row in flat[1:])
+        assert flat_urls == [
+            "https://example.com/a",
+            "https://example.com/a",
+            "https://example.com/b",
+        ]
+        summary_column = list(SUMMARY_CSV_HEADER).index("url")
+        summary_urls = sorted(row[summary_column] for row in summary[1:])
+        assert summary_urls == ["https://example.com/a", "https://example.com/b"]
+
+        for url in set(flat_urls):
+            assert url in html, f"{url} is in the CSVs but not the HTML"
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
 def test_both_tables_appear_in_the_html():
     html = render_report(_scan(), _records())
     assert "Every share" in html
@@ -560,6 +595,7 @@ def test_the_run_directory_is_swapped_into_place_by_a_single_os_replace(monkeypa
 
 def test_a_killed_write_leaves_no_partial_set(monkeypatch):
     doomed = links_paths.new_run_id()
+    scan, records = _scan(), _records()
 
     def _boom(tmp_dir, dest_dir):
         raise RuntimeError("killed partway through the write")
@@ -567,7 +603,7 @@ def test_a_killed_write_leaves_no_partial_set(monkeypatch):
     monkeypatch.setattr(atomic_writeset, "_swap_into_place", _boom)
 
     with pytest.raises(RuntimeError):
-        write_report(_scan(), _records(), run_id=doomed)
+        write_report(scan, records, run_id=doomed)
 
     reports_dir = links_paths.links_reports_dir()
     assert not links_paths.links_run_dir(doomed).exists()
@@ -626,6 +662,7 @@ def test_every_written_filename_is_gitignored():
 
 
 def test_write_report_rejects_a_hostile_run_id():
+    scan, records = _scan(), _records()
     for hostile in ("../escape", "sub/dir", "/etc", "..", ".", ""):
         with pytest.raises(CliError):
-            write_report(_scan(), _records(), run_id=hostile)
+            write_report(scan, records, run_id=hostile)
