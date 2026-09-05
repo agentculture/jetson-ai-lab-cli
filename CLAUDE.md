@@ -62,10 +62,12 @@ in this repo; a public-only channel map, if you want one, is whatever
 `jlab discord members` extends the same read-only, public-only seam to a
 per-person view. It scans public **text** channels over a time window (default
 90 days, override with `--since`), aggregates by `author.id` only — never by
-username — and writes a gitignored HTML report to a fixed, repo-relative path,
-printing that path on success; `--json` emits the same statistics id-only (no
-name resolution). Display names are resolved from ids in one final batch step,
-only at render time, so the aggregation stage never touches or stores a
+username — and writes a gitignored HTML report plus a CSV sibling into a
+fresh, per-run subdirectory under a repo-relative reports directory
+(`jlab/members/paths.py::members_run_dir`), printing the HTML path on success;
+`--json` emits the same statistics id-only (no name resolution, no files
+written). Display names are resolved from ids in one final batch step, only at
+render time, so the aggregation stage never touches or stores a
 human-readable identity.
 
 **The CLI issues no verdict.** It organizes statistics — message counts, breadth
@@ -84,6 +86,54 @@ voice sessions won't appear in the report — a recorded decision, not an
 oversight), and forum channels/threads are a possible follow-up, not covered
 today. The report file itself is gitignored and must never be committed —
 running the verb is the only way to get one, and its output stays local.
+
+### Links: shared-URL report for outreach (`jlab discord links`)
+
+`jlab discord links` is the same read-only, public-only seam applied to a
+third view: what the community has been sharing, not who's been talking or
+how much. It sweeps public text channels over a time window (default 90 days,
+`--since`), extracts URLs from message content, `attachments[].url` and
+`embeds[].url`/description/fields (deduped against each other), and writes one
+run's whole artifact set — an HTML report, a flat CSV (one row per share:
+url, channel, timestamp, thread reference, author, jump link), and a derived
+per-URL summary CSV — into its own gitignored per-run subdirectory
+(`jlab/links/paths.py::links_run_dir`), printing the HTML path on success.
+`--json` emits the id-only extraction stage (author ids, urls, channels,
+timestamps, thread references, jump links) and returns before name resolution
+or any file write is reached — unconditionally, with no flag that changes it.
+Bots and webhooks are excluded by default (`--include-bots` opts them in).
+`--concurrency` controls channel-read fan-out (default 4), matching `members`
+and `active`. `--from-cache <run-id>` re-renders a previous run's cached
+extraction — written alongside the HTML/CSVs in the same run directory — into
+a fresh HTML/CSV pair with no new Discord scan.
+
+**The content-retention inversion, stated plainly.** The members path's rule
+(above) is that message content never survives past aggregation — only counts
+and lengths do. The links report inverts that rule on purpose: a URL *is*
+content, and a links report cannot exist without retaining it. What is
+retained per link: the **url, channel, timestamp, thread reference (where one
+applies), author id, and a jump link** back to the original message. What is
+**never** retained, in the cache, the CSVs, or the HTML: the surrounding
+message text. A reader of this file should treat that as a deliberate,
+narrowly-scoped decision — carrying the URL and nothing else — not as a
+contradiction of the members path's no-content rule.
+
+Attribution and containment otherwise mirror `members`: display names are
+resolved from author ids in one final batch, only at render time, via the
+same `jlab/members/resolve.py`; `--json` stays id-only with no opt-in.
+Unlike `members`, a departed author's link is **never dropped** — the row is
+kept with the bare author id and no name, because the row *is* a shared link,
+not a person-level record, and deleting it would erase what was posted.
+Attachment URLs are Discord CDN links signed at fetch time; a live measurement
+found they expire roughly 14-22 hours later regardless of message age, so the
+report marks every attachment URL as expiring and renders the jump link
+beside it as the durable pointer — a report rendered from a stale
+`--from-cache` copy says so rather than presenting dead links as live. Like
+`members`, the CLI issues no verdict: no "most shared" link, no domain
+ranking, no recommended reading.
+
+`discord read` and `discord active` are unchanged by this addition — `links`
+is a new, additive verb in the `discord` noun group.
 
 ## Running the CLI — the command-name trap
 
