@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-05
+
+### Added
+
+- **`jlab discord links` — what the Jetson AI Lab Discord has been sharing.**
+  Sweeps public text channels over a window (default 90 days, `--since`) and
+  writes one run's HTML report plus a **flat CSV** (one row per share) and a
+  derived **per-URL summary CSV** into a gitignored per-run subdirectory,
+  printing the HTML path. URLs are extracted from four deduped sources:
+  message content, `attachments[].url`, `embeds[].url`, and embed
+  description/field bodies — the last because Discord's auto-preview embeds
+  merely duplicate a URL already in the text, while rich embeds carry
+  `url=None` and hide their links in the body. Bots are excluded by default
+  (`--include-bots` opts in). **It issues no verdict:** no "most shared", no
+  ranked domains, no recommended reading.
+- **The content-retention inversion, stated on purpose.** The members path
+  discards message content after measuring its length; a links report cannot
+  exist under that rule, because a URL *is* content. What is retained per
+  link: url, channel, timestamp, thread reference, author id and a jump link.
+  What is never retained: the surrounding message text.
+- **`--from-cache <run-id>` re-renders a previous run without a second scan.**
+  A 90-day sweep costs a large share of a bot token shared with other mesh
+  agents, so each run caches its extraction (id-only, no display names) to a
+  sibling `<run-id>-cache` directory. A cached render shows the **scan**
+  timestamp, not the render timestamp, and states the same coverage figures as
+  the run that wrote it.
+- **Attachment URLs are marked as expiring.** Measured against the live guild:
+  Discord CDN attachment links are signed at fetch time and expire roughly
+  14-22 hours later regardless of message age — a 143-day-old message's
+  attachment URL expired in 14.7h. They are never rendered as clickable
+  anchors; the jump link beside them is the durable pointer.
+- **CSV output for `jlab discord members` too**, through the same shared
+  writer — one implementation, not two.
+
+### Changed
+
+- **Report artifacts now land in a per-run subdirectory** (`data/reports/
+  <verb>/<run-id>/`) rather than loose files in a shared directory. This makes
+  each run's whole artifact set land through a single atomic `os.replace`, so
+  a killed run leaves either a complete set or nothing — never a complete CSV
+  beside a missing or stale HTML. **This changes the output path of the
+  already-shipped `jlab discord members` verb.**
+- `_serialize_message` now carries attachment URLs, embed URLs and bodies, a
+  jump link, and channel and thread identity. Keys were only added, never
+  renamed or removed, so existing `--json` consumers of `channels` / `read` /
+  `active` keep working.
+- `resolve_authors` fans out under a bounded semaphore instead of a serial
+  loop. The serial version measured 286s of a 302s run — 869 authors at
+  ~329ms each, 94.8% of wall-clock spent waiting one round trip at a time.
+
+### Fixed
+
+- **A registered verb with no `explain` entry used to ship green.** The
+  existing guard iterated the catalog's paths, proving every entry resolves —
+  it could never notice a registered verb *missing* an entry. The converse
+  test now walks the parser's registered subcommands and asserts each has one.
+- CSV fields beginning with `=`, `+`, `-`, `@`, tab or carriage return are
+  prefix-escaped, so a hostile display name or URL opens as inert text rather
+  than executing as a formula in Excel or Sheets.
+- The CSV formula-injection defence is verified by **opening** a generated
+  file in a real spreadsheet application (LibreOffice Calc, headless), not
+  only by asserting on the emitted bytes — with a control test proving the
+  reader executes the unescaped form, so the check cannot go vacuous.
+- Rendered URLs are scheme-filtered: only `http`/`https` become anchors.
+  `javascript:`, `data:` and control-character smuggling render as inert text
+  — escaping makes a hostile URL *display* safely, but only scheme filtering
+  stops a click from executing it.
+
 ## [0.6.0] - 2026-09-04
 
 ### Added

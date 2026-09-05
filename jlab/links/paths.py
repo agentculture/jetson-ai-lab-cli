@@ -1,20 +1,21 @@
-"""Repo-anchored output path for member-report data (containment boundary).
+"""Repo-anchored output path for the links-report data (containment boundary).
 
-The members report (``docs/specs/2026-09-04-jlab-discord-members-report.md``)
-contains person-level data about real Discord community members. It must
-never be committed and must never land outside this repo's gitignored output
-directory — including when the command is invoked from an unrelated working
-directory.
+The links report (``docs/plans/2026-09-05-jlab-discord-links-report.md``)
+contains URLs and author ids scraped from the Jetson AI Lab Discord's
+public channels. Like the members report, it must never be committed and
+must never land outside this repo's gitignored output directory —
+including when the command is invoked from an unrelated working directory.
 
-Resolving the output path from the caller's current working directory would
-let someone run ``jlab discord members`` from a different checkout entirely
-and write person-level data somewhere with no ignore rule, silently
+Resolving the output path from the caller's current working directory
+would let someone run ``jlab discord links`` from a different checkout
+entirely and write scraped data somewhere with no ignore rule, silently
 defeating that containment. So this module copies the pattern
-``jlab/cli/_commands/whoami.py::find_culture_yaml`` uses to locate its own
-``culture.yaml``: walk up from ``__file__`` — never the caller's CWD — to
-find this checkout's repo root, and refuse to write at all when no repo root
-can be found (e.g. a wheel install with no ``culture.yaml`` alongside the
-package), rather than falling back to some other location.
+``jlab/members/paths.py`` uses (itself copied from
+``jlab/cli/_commands/whoami.py::find_culture_yaml``): walk up from
+``__file__`` — never the caller's CWD — to find this checkout's repo
+root, and refuse to write at all when no repo root can be found (e.g. a
+wheel install with no ``culture.yaml`` alongside the package), rather
+than falling back to some other location.
 """
 
 from __future__ import annotations
@@ -25,24 +26,26 @@ from pathlib import Path
 
 from jlab.cli._errors import EXIT_ENV_ERROR, CliError
 
-# Same marker file whoami.py uses to find its own repo root.
+# Same marker file whoami.py (and jlab/members/paths.py) use to find their
+# own repo root.
 _REPO_MARKER = "culture.yaml"
 
 # Gitignored, relative to the repo root. Kept as a tuple of path segments so
 # callers never need to worry about separator handling.
-_REPORTS_SUBDIR = ("data", "reports", "members")
+_REPORTS_SUBDIR = ("data", "reports", "links")
 
-_DEFAULT_REPORT_FILENAME = "members-report.html"
+_DEFAULT_REPORT_FILENAME = "links-report.html"
 
 
 def find_repo_root() -> Path | None:
     """Locate this checkout's repo root by walking up from this module.
 
-    Mirrors ``whoami.find_culture_yaml``: the anchor is this package's own
+    Mirrors ``jlab.members.paths.find_repo_root`` (itself mirroring
+    ``whoami.find_culture_yaml``): the anchor is this package's own
     location on disk, never the caller's current working directory, so
     invoking the CLI from an unrelated directory cannot redirect where
-    person-level data gets written. Returns ``None`` when no repo root can
-    be found — e.g. a wheel install with no ``culture.yaml`` shipped
+    scraped data gets written. Returns ``None`` when no repo root can be
+    found — e.g. a wheel install with no ``culture.yaml`` shipped
     alongside the package.
     """
     here = Path(__file__).resolve()
@@ -59,7 +62,7 @@ def _reject_symlink_escape(path: Path, root: Path) -> None:
 
     1. Walk every path component between *root* and *path* that already
        exists on disk, and reject any one of them that is itself a
-       symlink (e.g. ``data/reports/members`` — or ``data`` or
+       symlink (e.g. ``data/reports/links`` — or ``data`` or
        ``data/reports`` above it — already being a symlink pointing
        somewhere else).
     2. If *path* itself exists, resolve it fully and reject unless the
@@ -110,12 +113,12 @@ def _reject_symlink_escape(path: Path, root: Path) -> None:
             )
 
 
-def members_reports_dir() -> Path:
+def links_reports_dir() -> Path:
     """Return the gitignored PARENT directory that holds one dir per run.
 
     This directory is shared across runs; it never holds a run's artifacts
     directly. Each run writes into its own child of it — see
-    :func:`members_run_dir` for why that layout is load-bearing rather than
+    :func:`links_run_dir` for why that layout is load-bearing rather than
     cosmetic. Creates the directory (and its parents) if it does not exist
     yet.
 
@@ -126,17 +129,17 @@ def members_reports_dir() -> Path:
 
     Raises :class:`CliError` with :data:`~jlab.cli._errors.EXIT_ENV_ERROR`
     instead of writing anywhere else when no repo root can be resolved, or
-    when a symlink would place the output outside the repo root —
-    person-level data must never be written outside this repo's ignored
-    path, so refusing to write is the only acceptable fallback.
+    when a symlink would place the output outside the repo root — scraped
+    data must never be written outside this repo's ignored path, so
+    refusing to write is the only acceptable fallback.
     """
     root = find_repo_root()
     if root is None:
         raise CliError(
             EXIT_ENV_ERROR,
-            "cannot resolve the jetson-ai-lab-cli repo root for the members report output path",
+            "cannot resolve the jetson-ai-lab-cli repo root for the links report output path",
             "run this from an editable/source checkout of jetson-ai-lab-cli "
-            "(a wheel install has no culture.yaml to anchor on); the members "
+            "(a wheel install has no culture.yaml to anchor on); the links "
             "report refuses to write outside its gitignored repo-relative "
             "path rather than falling back to the current directory",
         )
@@ -174,10 +177,10 @@ def _require_bare_segment(value: str, kind: str, example: str) -> None:
         )
 
 
-def members_run_dir(run_id: str) -> Path:
+def links_run_dir(run_id: str) -> Path:
     """Return the per-run subdirectory that holds ONE run's whole artifact set.
 
-    Layout is ``data/reports/members/<run-id>/<artifact>`` — one directory per
+    Layout is ``data/reports/links/<run-id>/<artifact>`` — one directory per
     run, never a shared flat directory. That matters for more than tidiness:
     :func:`jlab.atomic_writeset.write_artifact_set` replaces its *entire*
     destination directory with exactly the file set it is handed. Pointed at
@@ -191,7 +194,7 @@ def members_run_dir(run_id: str) -> Path:
     of that rename, and pre-creating it would push the swap into the
     two-rename (rename-aside-then-rename-in) branch, weakening the guarantee
     for no reason. Only the shared parent is created (by
-    :func:`members_reports_dir`).
+    :func:`links_reports_dir`).
 
     *run_id* is validated as a bare path segment for the same reason
     filenames are: a run id carrying a separator or ``..`` would place the
@@ -203,12 +206,12 @@ def members_run_dir(run_id: str) -> Path:
     repo root — see that function's docstring for the exact (point-in-time,
     non-race-free) guarantee this provides.
     """
-    reports_dir = members_reports_dir()
+    reports_dir = links_reports_dir()
     _require_bare_segment(run_id, "run id", "20260905T101112Z-1a2b3c4d")
     run_dir = reports_dir / run_id
     root = find_repo_root()
     if root is not None:
-        # members_reports_dir() above already raised if this were None; the
+        # links_reports_dir() above already raised if this were None; the
         # check is repeated here only because find_repo_root() is called
         # fresh rather than threaded through, and mypy/readers should not
         # have to trust that invariant silently.
@@ -216,15 +219,15 @@ def members_run_dir(run_id: str) -> Path:
     return run_dir
 
 
-def members_report_path(run_id: str, filename: str = _DEFAULT_REPORT_FILENAME) -> Path:
+def links_report_path(run_id: str, filename: str = _DEFAULT_REPORT_FILENAME) -> Path:
     """Return the path of one artifact inside *run_id*'s own run directory.
 
     Both *run_id* and *filename* are constrained to bare path segments: the
-    report carries person-level data (c21/h30), containment is the point, and a
+    report carries scraped URLs and author ids (c5/h22, c9/h26), containment is the point, and a
     name with any path separator, a parent reference, or an absolute root
-    would escape the gitignored directory — ``members_report_path(run, "../../x.html")``
+    would escape the gitignored directory — ``links_report_path(run, "../../x.html")``
     resolved outside the repo entirely before this guard existed — so those
     are refused rather than normalised.
     """
     _require_bare_segment(filename, "report filename", _DEFAULT_REPORT_FILENAME)
-    return members_run_dir(run_id) / filename
+    return links_run_dir(run_id) / filename

@@ -79,10 +79,12 @@ jlab discord members --since 30       # narrower window
 jlab discord members --json           # same statistics, id-only, on stdout
 ```
 
-This scans the same public text channels and writes an HTML report — message
-counts, breadth across channels, thread/question starts, and length-based
-substance signals per participant — to a fixed path inside this repo, printing
-that path when it's done.
+This scans the same public text channels and writes an HTML report plus a CSV
+sibling — message counts, breadth across channels, thread/question starts, and
+length-based substance signals per participant — into a fresh, per-run
+directory inside this repo, printing the HTML path when it's done. Each run
+gets its own subdirectory so a later run can never overwrite or partially
+clobber an earlier one.
 
 **Expect it to take about five minutes.** Measured against the Jetson AI Lab
 guild (100 public text channels, 90-day window): ~15s to scan and page the
@@ -106,6 +108,64 @@ deliberately out of scope — a member who only attends voice sessions won't sho
 up in this report — and forum channels/threads are a possible follow-up, not
 covered yet. The generated report is **gitignored and never committed**; it's a
 local artifact you hand to a maintainer, not a checked-in file.
+
+### Shared links (`jlab discord links`)
+
+```bash
+jlab discord links                          # last 90 days, public text channels
+jlab discord links --since 30               # narrower window
+jlab discord links --include-bots           # count bot/webhook-shared links too
+jlab discord links --from-cache <run-id>    # re-render a previous run, no re-scan
+jlab discord links --json                   # id-only extraction, on stdout
+```
+
+**Why this exists:** the links a community shares are the clearest signal of
+what it's actually reading and working on. For an agent whose eventual job is
+to fetch and index Jetson AI Lab knowledge, the URLs members already vetted
+for each other would make a ready-made seed corpus — today they're scattered
+across 90 days and 100 channels with no way to see them in one place, and this
+verb only surfaces them; it doesn't fetch, index, or query anything itself.
+
+This sweeps the same public text channels as `active` and `members` and writes
+one run's whole artifact set into its own gitignored, per-run directory: an
+HTML report, a **flat CSV** (one row per share: url, channel, timestamp,
+thread reference, author, jump link), and a derived **summary CSV** (one row
+per distinct URL: share count, first/last seen, channels touched). A cached
+copy of the extraction is written to a sibling `<run-id>-cache` directory —
+one run directory holds exactly one atomically-written artifact set, so the
+cache cannot share it — and `--from-cache <run-id>` re-renders that run's HTML
+and CSVs without opening a new Discord scan.
+Bots and webhooks are excluded by default; `--include-bots` opts them in.
+**It issues no verdict:** no "most shared" link, no ranked domains, no
+recommended reading — it organizes what was shared and leaves the judgment to
+whoever reads the report.
+
+**This report deliberately retains content, unlike the members report above.**
+The members path's rule is that message content never survives past
+aggregation — only counts and lengths do. A links report can't honor that rule
+and still exist, because a URL *is* the content: it's the whole point of the
+report. So the inversion is a decision, not a bug: what's retained is the
+**URL itself, the channel it was shared in, its timestamp, a thread reference
+where one applies, the sharer's author id, and a jump link back to the
+original message** — and nothing else. The surrounding message text is never
+retained, in the cache, the CSVs, or the HTML.
+
+Names follow the same containment as `members`: aggregation and `--json` are
+id-only — display names are resolved from ids in one final batch, only when
+rendering the HTML and CSVs, and no flag changes that. A member who has since
+left the guild still keeps their link in the report; only their id shows, with
+no name resolved for it.
+
+One more thing worth knowing before you open a report: Discord's attachment
+CDN links are **signed and expire roughly 14 to 22 hours after the scan that
+found them** (measured against the live guild) — regardless of how old the
+original message is. The report marks every attachment URL as *expiring* for
+this reason, right beside its jump link, which is the durable way back to the
+original share once the direct link has gone dead. A report rendered from an
+old `--from-cache` copy says so rather than presenting stale links as live.
+
+`discord read` and `discord active` are unchanged by any of this — `links` is
+a new, additive verb alongside them.
 
 ## Make it your own
 

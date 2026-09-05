@@ -17,13 +17,20 @@ Covers t5's acceptance criteria:
 
 from __future__ import annotations
 
+import csv
 import re
+import shutil
+import subprocess
+import threading
 import tomllib
 from pathlib import Path
 
 import pytest
 
+from jlab import atomic_writeset
 from jlab.cli._errors import CliError
+from jlab.members import paths as members_paths
+from jlab.members import report as report_module
 from jlab.members.report import render_report, write_report
 
 HOSTILE_NAME = '<script>alert(1)</script>"><img src=x onerror=alert(2)>'
@@ -67,6 +74,13 @@ def _aggregate(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+def _resolved() -> dict:
+    return {
+        "111": {"display_name": "Ada"},
+        "222": {"display_name": "Bo"},
+    }
 
 
 # --- 1. self-contained, no build step, no dependencies -------------------
@@ -324,9 +338,11 @@ def test_write_report_writes_into_the_repo_anchored_directory():
         assert path.is_file()
         text = path.read_text(encoding="utf-8")
         assert text.startswith("<!doctype html>")
-        assert path.parts[-3:] == ("reports", "members", "test-members-report.html")
+        # data/reports/members/<run-id>/test-members-report.html
+        assert path.name == "test-members-report.html"
+        assert path.parent.parent.parts[-2:] == ("reports", "members")
     finally:
-        path.unlink(missing_ok=True)
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def test_write_report_returns_the_same_html_it_rendered():
@@ -336,7 +352,226 @@ def test_write_report_returns_the_same_html_it_rendered():
             _aggregate(), generated_at=_generated_at_of(path)
         )
     finally:
-        path.unlink(missing_ok=True)
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+# --- per-run directory + atomic artifact set (t15) ------------------------
+
+
+def _read_csv_beside(html_path: Path) -> list[list[str]]:
+    csv_path = html_path.with_suffix(".csv")
+    with csv_path.open(newline="", encoding="utf-8") as fh:
+        return list(csv.reader(fh))
+
+
+def test_write_report_puts_its_whole_set_in_a_private_run_directory():
+    """Criterion 1: one subdirectory per run, holding that run's whole set."""
+    path = write_report(_aggregate())
+    try:
+        run_dir = path.parent
+        assert run_dir.parent == members_paths.members_reports_dir()
+        names = sorted(p.name for p in run_dir.iterdir())
+        assert names == ["members-report.csv", "members-report.html"]
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_two_runs_get_separate_directories_and_neither_deletes_the_other():
+    """Criterion 1/3: no sibling run's directory is ever deleted."""
+    first = write_report(_aggregate())
+    try:
+        second = write_report(_aggregate())
+        try:
+            assert first.parent != second.parent
+            assert first.is_file()
+            assert first.with_suffix(".csv").is_file()
+            assert second.is_file()
+            assert second.with_suffix(".csv").is_file()
+        finally:
+            shutil.rmtree(second.parent, ignore_errors=True)
+    finally:
+        shutil.rmtree(first.parent, ignore_errors=True)
+
+
+def test_the_run_directory_is_swapped_into_place_by_a_single_os_replace(monkeypatch):
+    """Criterion 1: a fresh run directory takes the one-rename atomic branch."""
+    calls: list[tuple] = []
+    real_replace = atomic_writeset.os.replace
+
+    def _counting_replace(src, dst, *a, **kw):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst, *a, **kw)
+
+    monkeypatch.setattr(atomic_writeset.os, "replace", _counting_replace)
+
+    path = write_report(_aggregate())
+    try:
+        assert len(calls) == 1, f"expected one atomic rename, got {calls}"
+        assert calls[0][1] == str(path.parent)
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_a_failed_run_leaves_no_partial_artifacts_and_spares_the_previous_run(
+    monkeypatch,
+):
+    """Criterion 2/3: never a complete CSV beside a missing or stale HTML."""
+    previous = write_report(_aggregate(), filename="previous-run.html")
+    try:
+        previous_names = sorted(p.name for p in previous.parent.iterdir())
+        doomed_run_id = members_paths.new_run_id()
+
+        def _boom(tmp_dir, dest_dir):
+            raise RuntimeError("killed partway through the write")
+
+        monkeypatch.setattr(atomic_writeset, "_swap_into_place", _boom)
+
+        aggregate = _aggregate()
+        with pytest.raises(RuntimeError):
+            write_report(aggregate, run_id=doomed_run_id)
+
+        # Nothing of the failed run reached the report directory: neither its
+        # own run directory nor a staging directory named after it. (Asserted
+        # against this run's own id rather than a directory-wide before/after
+        # snapshot, which other workers under `pytest -n auto` would perturb.)
+        reports_dir = members_paths.members_reports_dir()
+        assert not members_paths.members_run_dir(doomed_run_id).exists()
+        leftovers = [p.name for p in reports_dir.iterdir() if doomed_run_id in p.name]
+        assert leftovers == [], f"a failed run left artifacts behind: {leftovers}"
+
+        # The previous run survives fully intact.
+        assert sorted(p.name for p in previous.parent.iterdir()) == previous_names
+        assert previous.read_text(encoding="utf-8").startswith("<!doctype html>")
+    finally:
+        shutil.rmtree(previous.parent, ignore_errors=True)
+
+
+def test_parallel_writers_do_not_clobber_each_other():
+    """Criterion 3: concurrent calls each get their own intact run directory."""
+    results: list[Path] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    start = threading.Barrier(8)
+
+    def _run() -> None:
+        try:
+            start.wait(timeout=30)
+            path = write_report(_aggregate())
+        except BaseException as exc:  # pragma: no cover - only on failure
+            with lock:
+                errors.append(exc)
+        else:
+            with lock:
+                results.append(path)
+
+    threads = [threading.Thread(target=_run) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    try:
+        assert not errors, errors
+        assert len({path.parent for path in results}) == 8
+        for path in results:
+            assert path.read_text(encoding="utf-8").startswith("<!doctype html>")
+            assert path.with_suffix(".csv").is_file()
+            assert sorted(p.name for p in path.parent.iterdir()) == [
+                "members-report.csv",
+                "members-report.html",
+            ]
+    finally:
+        for path in results:
+            shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_every_written_filename_is_gitignored():
+    """Criterion 4: enumerate the ACTUAL filenames under the new layout."""
+    path = write_report(_aggregate())
+    try:
+        written = sorted(path.parent.iterdir())
+        assert written, "the run wrote nothing to enumerate"
+        for artifact in written:
+            result = subprocess.run(
+                ["git", "check-ignore", "-q", str(artifact)],
+                cwd=Path(__file__).resolve().parents[1],
+                check=False,
+            )
+            assert result.returncode == 0, f"{artifact} must be gitignored"
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_write_report_rejects_a_hostile_run_id():
+    """Criterion 5: a run id cannot escape the report directory either."""
+    aggregate = _aggregate()
+    for hostile in ("../escape", "sub/dir", "/etc", "..", ".", ""):
+        with pytest.raises(CliError):
+            write_report(aggregate, run_id=hostile)
+
+
+# --- the CSV sibling ------------------------------------------------------
+
+
+def test_csv_header_and_rows_match_the_html_table():
+    path = write_report(_aggregate(), resolved=_resolved())
+    try:
+        rows = _read_csv_beside(path)
+        assert rows[0] == [
+            "member",
+            "discord_id",
+            "messages",
+            "distinct_channels",
+            "messages_ending_in_a_question",
+            "characters_written",
+            "average_characters_per_message",
+        ]
+        html = path.read_text(encoding="utf-8")
+        # Same rows, same order as the HTML table's <td class="id"> cells.
+        html_ids = re.findall(r'<td class="id">([^<]*)</td>', html)
+        assert [row[1] for row in rows[1:]] == html_ids
+        assert len(rows) - 1 == len(html_ids)
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_csv_carries_no_message_content_beyond_counts_and_ids():
+    """The privacy contract: only what the HTML already shows."""
+    path = write_report(_aggregate(), resolved=_resolved())
+    try:
+        rows = _read_csv_beside(path)
+        assert len(rows[0]) == 7
+        for row in rows[1:]:
+            assert len(row) == 7
+            # Every cell after the label is numeric-or-id, never free text.
+            for cell in row[1:]:
+                float(cell)
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_report_module_contains_no_csv_code_of_its_own():
+    """All CSV production goes through jlab.csv_export.write_csv."""
+    source = Path(report_module.__file__).read_text(encoding="utf-8")
+    assert "import csv" not in source
+    assert "csv.writer" not in source
+    assert "csv.DictWriter" not in source
+    assert "escape_csv_field" not in source, "escaping is write_csv's job, not the renderer's"
+    assert "from jlab.csv_export import write_csv" in source
+
+
+def test_csv_escapes_a_formula_injection_display_name():
+    """The shared escaper is actually reached (no hand-rolled path)."""
+    path = write_report(
+        _aggregate(),
+        resolved={"111": {"display_name": "=cmd|' /c calc'!A1"}, "222": {"display_name": "b"}},
+    )
+    try:
+        rows = _read_csv_beside(path)
+        labels = [row[0] for row in rows[1:]]
+        assert "'=cmd|' /c calc'!A1" in labels
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def _generated_at_of(path: Path) -> str:

@@ -30,10 +30,12 @@ plumbing and stays a plain ``dependencies = []`` runtime module.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from jlab.cli import _discord
+from jlab.cli._errors import EXIT_USER_ERROR, CliError
 
 # Per-author resolution status.
 STATUS_OK = "ok"
@@ -173,11 +175,27 @@ async def _resolve_one_async(guild: Any, author_id: str) -> ResolvedAuthor:
     )
 
 
+DEFAULT_RESOLVE_CONCURRENCY = 4
+
+
+def _validated_concurrency(concurrency: int) -> int:
+    """Return a positive concurrency bound, or raise a structured user error."""
+    bound = int(concurrency)
+    if bound < 1:
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"--concurrency must be >= 1, got {bound}",
+            remediation=f"pass a positive integer (default {DEFAULT_RESOLVE_CONCURRENCY})",
+        )
+    return bound
+
+
 def resolve_authors(
     guild_id: int,
     stats_by_author_id: Mapping[str, Any],
     *,
     include_departed: bool = False,
+    concurrency: int = DEFAULT_RESOLVE_CONCURRENCY,
 ) -> ResolveResult:
     """Resolve every id in ``stats_by_author_id`` in one batched session.
 
@@ -194,15 +212,32 @@ def resolve_authors(
     counted in ``total_authors`` and reported via ``excluded_departed_count``);
     pass ``include_departed=True`` to include everyone regardless of
     membership.
+
+    Lookups run concurrently, bounded by an ``asyncio.Semaphore`` (*concurrency*,
+    default :data:`DEFAULT_RESOLVE_CONCURRENCY`) — the same shape the channel
+    scan uses. This was a plain sequential ``for`` loop, which measured 286s of
+    a 302s run (869 authors at ~329ms each): 94.8% of wall-clock spent waiting
+    on one round trip at a time. Note the upstream batch verb
+    (``discord-bot-cli`` #14's ``user get <id> [<id> ...]``) does NOT replace
+    this loop — it is built on ``fetch_user``, the global profile, and carries
+    no guild membership, which is the whole reason this stage calls
+    ``guild.fetch_member``.
     """
     author_ids = list(stats_by_author_id.keys())
+    bound = _validated_concurrency(concurrency)
 
     async def action(client: Any) -> dict[str, ResolvedAuthor]:
         guild = await client.fetch_guild(guild_id)
-        resolved: dict[str, ResolvedAuthor] = {}
-        for author_id in author_ids:
-            resolved[str(author_id)] = await _resolve_one_async(guild, author_id)
-        return resolved
+        semaphore = asyncio.Semaphore(bound)
+
+        async def one(author_id: Any) -> tuple[str, ResolvedAuthor]:
+            async with semaphore:
+                return str(author_id), await _resolve_one_async(guild, author_id)
+
+        pairs = await asyncio.gather(*(one(a) for a in author_ids))
+        # Rebuild in input order: gather preserves argument order, and the
+        # ResolveResult contract (and its tests) depend on it.
+        return dict(pairs)
 
     resolved = _discord._run(action)
 
