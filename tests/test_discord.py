@@ -430,6 +430,52 @@ class _FakeAuthor:
         self.nick = nick
 
 
+class _FakeAttachment:
+    def __init__(
+        self,
+        id: str,
+        filename: str,
+        url: str,
+        *,
+        content_type: str | None = None,
+        size: int | None = None,
+    ) -> None:
+        self.id = id
+        self.filename = filename
+        self.url = url
+        self.content_type = content_type
+        self.size = size
+
+
+class _FakeEmbedField:
+    def __init__(self, name: str, value: str) -> None:
+        self.name = name
+        self.value = value
+
+
+class _FakeEmbed:
+    def __init__(
+        self,
+        *,
+        type: str = "rich",
+        url: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        fields: list | None = None,
+    ) -> None:
+        self.type = type
+        self.url = url
+        self.title = title
+        self.description = description
+        self.fields = fields or []
+
+
+class _FakeThread:
+    def __init__(self, id: str, name: str) -> None:
+        self.id = id
+        self.name = name
+
+
 class _FakeMsg:
     def __init__(
         self,
@@ -441,11 +487,20 @@ class _FakeMsg:
         bot: bool = False,
         global_name: str | None = None,
         nick: str | None = None,
+        attachments: list | None = None,
+        embeds: list | None = None,
+        thread: _FakeThread | None = None,
+        jump_url: str | None = None,
     ) -> None:
         self.id = id
         self.author = _FakeAuthor(id + "a", author, bot=bot, global_name=global_name, nick=nick)
         self.content = content
         self.created_at = created_at
+        self.attachments = attachments or []
+        self.embeds = embeds or []
+        self.thread = thread
+        if jump_url is not None:
+            self.jump_url = jump_url
 
 
 class _FakeChannel:
@@ -1444,3 +1499,216 @@ def test_upstream_workaround_is_isolated_to_the_adapter() -> None:
         if any(n in text for n in needles):
             offenders.append(str(path.relative_to(root)))
     assert offenders == []
+
+
+# ---------------------------------------------------------------------------
+# 7. link-bearing serialization (t2)
+#
+# `_serialize_message` gains KEYS ONLY: attachment urls, embed urls AND embed
+# bodies, a jump link, the enclosing channel's identity, and a thread
+# reference. Nothing existing is renamed or removed, so `--json` consumers of
+# channels/read/active keep working.
+# ---------------------------------------------------------------------------
+
+
+_LEGACY_MESSAGE_KEYS = {"id", "author", "content", "created_at"}
+
+
+def _serialize(msg, channel=None) -> dict:
+    return _discord._serialize_message(msg, channel=channel)
+
+
+def test_serialize_message_keeps_every_legacy_key() -> None:
+    """Additive only: the four pre-existing keys survive with their meaning."""
+    now = datetime.now(timezone.utc)
+    msg = _FakeMsg("m0", "ann", "hi there", now)
+    out = _serialize(msg)
+    assert _LEGACY_MESSAGE_KEYS <= set(out)
+    assert out["id"] == "m0"
+    assert out["content"] == "hi there"
+    assert out["created_at"] == now.isoformat()
+    assert out["author"]["name"] == "ann"
+
+
+def test_serialize_message_carries_attachment_urls() -> None:
+    now = datetime.now(timezone.utc)
+    msg = _FakeMsg(
+        "m1",
+        "ann",
+        "see this",
+        now,
+        attachments=[
+            _FakeAttachment(
+                "a1", "log.txt", "https://cdn.discordapp.com/x/log.txt", content_type="text/plain"
+            )
+        ],
+    )
+    out = _serialize(msg)
+    assert [a["url"] for a in out["attachments"]] == ["https://cdn.discordapp.com/x/log.txt"]
+    assert out["attachments"][0]["filename"] == "log.txt"
+    assert out["attachments"][0]["id"] == "a1"
+
+
+def test_serialize_message_no_attachments_is_empty_list_not_none() -> None:
+    out = _serialize(_FakeMsg("m2", "ann", "plain", datetime.now(timezone.utc)))
+    assert out["attachments"] == []
+    assert out["embeds"] == []
+
+
+def test_serialize_message_carries_embed_url() -> None:
+    """`type=link`/`type=article` embeds do carry a url (t1 probe)."""
+    msg = _FakeMsg(
+        "m3",
+        "ann",
+        "https://example.org/post",
+        datetime.now(timezone.utc),
+        embeds=[
+            _FakeEmbed(type="article", url="https://example.org/post", title="A post"),
+        ],
+    )
+    out = _serialize(msg)
+    assert out["embeds"][0]["url"] == "https://example.org/post"
+    assert out["embeds"][0]["type"] == "article"
+
+
+def test_serialize_message_carries_embed_description_and_field_bodies() -> None:
+    """Load-bearing (t1 probe): `type=rich` embeds have url=None.
+
+    Their links live in the description / field values, so a serializer that
+    only carried `embeds[].url` would silently drop every rich-embed link.
+    """
+    msg = _FakeMsg(
+        "m4",
+        "bot-ish",
+        "",
+        datetime.now(timezone.utc),
+        embeds=[
+            _FakeEmbed(
+                type="rich",
+                url=None,
+                title="Release",
+                description="notes at https://example.org/rich-body",
+                fields=[_FakeEmbedField("Docs", "https://example.org/field-body")],
+            )
+        ],
+    )
+    embed = _serialize(msg)["embeds"][0]
+    assert embed["url"] is None
+    assert "https://example.org/rich-body" in embed["description"]
+    assert embed["fields"] == [{"name": "Docs", "value": "https://example.org/field-body"}]
+
+
+def test_serialize_message_thread_reference_present_and_empty() -> None:
+    """A thread renders a reference; no thread renders an EMPTY one."""
+    now = datetime.now(timezone.utc)
+    with_thread = _serialize(
+        _FakeMsg("m5", "ann", "q?", now, thread=_FakeThread("t1", "how do I flash?"))
+    )
+    assert with_thread["thread"] == {"id": "t1", "name": "how do I flash?"}
+
+    without = _serialize(_FakeMsg("m6", "ann", "no thread", now))
+    # Empty reference — not a placeholder string, not None-with-a-label, not
+    # an error. Falsy so consumers can branch on it directly.
+    assert without["thread"] == {}
+    assert not without["thread"]
+
+
+def test_serialize_message_jump_url_prefers_the_objects_own() -> None:
+    msg = _FakeMsg(
+        "m7",
+        "ann",
+        "hi",
+        datetime.now(timezone.utc),
+        jump_url="https://discord.com/channels/1/2/m7",
+    )
+    assert _serialize(msg)["jump_url"] == "https://discord.com/channels/1/2/m7"
+
+
+def test_serialize_message_jump_url_is_none_when_unconstructable() -> None:
+    """No `jump_url` and no guild context => None, never a fabricated link."""
+    assert _serialize(_FakeMsg("m8", "ann", "hi", datetime.now(timezone.utc)))["jump_url"] is None
+
+
+def test_serialize_message_carries_channel_identity() -> None:
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel("c1", "general", "text", True, [])
+    out = _serialize(_FakeMsg("m9", "ann", "hi", now), channel=chan)
+    assert out["channel"] == {"id": "c1", "name": "general"}
+
+
+def test_serialize_message_channel_identity_is_empty_without_a_channel() -> None:
+    out = _serialize(_FakeMsg("m10", "ann", "hi", datetime.now(timezone.utc)))
+    assert out["channel"] == {}
+
+
+def test_probe_channel_messages_name_their_channel() -> None:
+    """`_channel_row`'s channel identity reaches every message it carries."""
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c42",
+        "jetson-help",
+        "text",
+        True,
+        [_FakeMsg("m0", "ann", "hi", now - timedelta(days=1))],
+    )
+    row = asyncio.run(_discord._probe_channel(chan, fetch_limit=5))
+    assert row["id"] == "c42"
+    assert row["messages"][0]["channel"] == {"id": "c42", "name": "jetson-help"}
+    assert row["messages"][0]["jump_url"] is None
+
+
+def test_read_messages_carries_links_and_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The `read` verb goes through the same serializer."""
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c1",
+        "general",
+        "text",
+        True,
+        [
+            _FakeMsg(
+                "m0",
+                "ann",
+                "docs",
+                now,
+                attachments=[_FakeAttachment("a1", "n.png", "https://cdn/n.png")],
+                embeds=[_FakeEmbed(type="link", url="https://example.org")],
+                jump_url="https://discord.com/channels/1/c1/m0",
+            )
+        ],
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    msg = _discord.read_messages(999, limit=5)[0]
+    assert msg["attachments"][0]["url"] == "https://cdn/n.png"
+    assert msg["embeds"][0]["url"] == "https://example.org"
+    assert msg["jump_url"] == "https://discord.com/channels/1/c1/m0"
+    assert msg["channel"] == {"id": "c1", "name": "general"}
+    assert msg["content"] == "docs"  # legacy key unchanged
+
+
+def test_serialize_message_survives_objects_missing_the_new_fields() -> None:
+    """A bare object (no attachments/embeds/thread attrs) must not raise."""
+
+    class _Bare:
+        id = "b1"
+        content = "hi"
+        created_at = None
+        author = _FakeAuthor("a1", "ann")
+
+    out = _serialize(_Bare())
+    assert out["attachments"] == []
+    assert out["embeds"] == []
+    assert out["thread"] == {}
+    assert out["jump_url"] is None
+
+
+def test_serialize_message_jump_url_built_from_ids_when_absent() -> None:
+    """Without `jump_url`, build the canonical link from guild/channel/msg ids."""
+
+    class _GuildRef:
+        id = "9"
+
+    chan = _FakeChannel("c1", "general", "text", True, [])
+    chan.guild = _GuildRef()
+    out = _serialize(_FakeMsg("m11", "ann", "hi", datetime.now(timezone.utc)), channel=chan)
+    assert out["jump_url"] == "https://discord.com/channels/9/c1/m11"
