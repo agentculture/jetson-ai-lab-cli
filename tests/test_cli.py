@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 
 import pytest
 
 from jlab import __version__
-from jlab.cli import main
+from jlab.cli import _build_parser, main
 from jlab.explain import known_paths
+from jlab.explain.catalog import ENTRIES
 
 
 def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
@@ -113,3 +115,50 @@ def test_every_catalog_path_resolves(capsys: pytest.CaptureFixture[str]) -> None
         rc = main(["explain", *path])
         assert rc == 0, f"explain {' '.join(path)} failed"
         capsys.readouterr()
+
+
+def test_explain_discord_links_resolves(capsys: pytest.CaptureFixture[str]) -> None:
+    rc = main(["explain", "discord", "links"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "discord links" in out
+
+
+def _registered_command_paths(
+    parser: argparse.ArgumentParser,
+) -> list[tuple[str, ...]]:
+    """Recursively collect every command path the parser actually registers.
+
+    Walks every ``argparse._SubParsersAction`` reachable from *parser*,
+    recording one path per subparser choice (and recursing into it), so the
+    result is every noun/verb path a user could actually invoke — the
+    converse of ``known_paths()``, which only enumerates the catalog's own
+    keys and therefore proves nothing about paths the catalog is missing.
+    """
+    paths: list[tuple[str, ...]] = [()]
+
+    def _walk(current: argparse.ArgumentParser, prefix: tuple[str, ...]) -> None:
+        for action in current._actions:
+            if not isinstance(action, argparse._SubParsersAction):
+                continue
+            for name, subparser in action.choices.items():
+                child_path = prefix + (name,)
+                paths.append(child_path)
+                _walk(subparser, child_path)
+
+    _walk(parser, ())
+    return paths
+
+
+def test_every_registered_command_has_a_catalog_entry() -> None:
+    """The converse of ``test_every_catalog_path_resolves``.
+
+    That test only proves every CATALOG entry resolves; it says nothing
+    about a verb that was registered on the parser but never given an
+    entry (exactly the ``discord links`` gap this test was added to close).
+    This walks the real, live parser and asserts every registered command
+    path — including the root — is a key in ``ENTRIES``.
+    """
+    parser = _build_parser()
+    missing = [path for path in _registered_command_paths(parser) if path not in ENTRIES]
+    assert not missing, f"registered commands missing an explain entry: {missing}"
