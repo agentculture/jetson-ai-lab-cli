@@ -42,6 +42,12 @@ dev = [
     "isort>=5.12.0",
     "black>=23.7.0",
     "teken>=0.8",
+    # Dev-only. The runtime package stays dependencies = [].
+    # Present so the CSV writer's spreadsheet-loadability criterion is
+    # actually EXECUTED rather than skipped: these CSVs exist to be loaded
+    # in pandas and Google Sheets, so that is the criterion closest to the
+    # real use and the one least worth asserting on bytes alone.
+    "pandas>=2.0",
 ]
 
 [tool.coverage.run]

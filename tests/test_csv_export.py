@@ -17,14 +17,21 @@ Written test-first per t4's acceptance criteria:
    importable as a dev dependency, ``pandas.read_csv`` -- with no
    preprocessing either way. pandas is NOT installed in this repo's dev
    group as of this task, so that half of the assertion is skipped rather
-   than added as a new dependency; the stdlib ``csv.reader`` round-trip
-   carries the assertion in its place.
+   carried by ``pandas.read_csv``, now that pandas is a dev dependency.
+5. Opening a generated CSV in a REAL spreadsheet application executes
+   nothing -- verified by driving LibreOffice Calc headless and inspecting
+   the saved workbook, with a control proving the reader does evaluate
+   formulas when they are not escaped.
 """
 
 from __future__ import annotations
 
 import csv
 import importlib.util
+import shutil
+import subprocess
+import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -195,3 +202,90 @@ def test_write_csv_uses_universal_newline_safe_mode(tmp_path):
         reader = csv.reader(fh)
         rows = list(reader)
     assert rows[1] == ["line1\nline2"]
+
+
+# ---------------------------------------------------------------------------
+# Spreadsheet-application verification (honesty condition h29).
+#
+# Every other test in this file asserts on the BYTES we emit. That is a proxy
+# for the behaviour we actually care about -- whether a spreadsheet executes a
+# hostile cell -- not a measurement of it. These two tests close that gap by
+# driving a real spreadsheet application (LibreOffice Calc, headless), opening
+# a generated CSV, and inspecting the saved workbook.
+#
+# The control test is the load-bearing half. Without it, "no formulas found"
+# would also pass against a reader that never evaluates formulas at all --
+# which is exactly what a first attempt at this check turned out to be doing.
+# ---------------------------------------------------------------------------
+
+_SOFFICE = shutil.which("soffice") or shutil.which("libreoffice")
+_HOSTILE_ROWS = [
+    ['=HYPERLINK("http://evil","click")', "@SUM(1+1)", 1],
+    ["+1234567890", "-2+3", 2],
+]
+
+
+def _to_xlsx(csv_path: Path) -> Path:
+    """Open *csv_path* in LibreOffice Calc and save it as .xlsx."""
+    subprocess.run(  # noqa: S603
+        [
+            _SOFFICE,
+            "--headless",
+            "--convert-to",
+            "xlsx",
+            "--outdir",
+            str(csv_path.parent),
+            str(csv_path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
+    )
+    return csv_path.with_suffix(".xlsx")
+
+
+def _sheet_xml(xlsx: Path) -> str:
+    with zipfile.ZipFile(xlsx) as zf:
+        return zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+
+@pytest.mark.skipif(_SOFFICE is None, reason="LibreOffice is not installed here")
+def test_escaped_csv_opens_as_inert_text_in_a_real_spreadsheet(tmp_path):
+    """h29: opening a generated CSV in a spreadsheet executes nothing."""
+    path = tmp_path / "escaped.csv"
+    write_csv(path, ["display_name", "url", "n"], _HOSTILE_ROWS)
+
+    sheet = _sheet_xml(_to_xlsx(path))
+
+    assert "<f" not in sheet, "a cell became a live formula despite escaping"
+    # Every hostile value survives as text, with the escape visible.
+    with zipfile.ZipFile(path.with_suffix(".xlsx")) as zf:
+        strings = zf.read("xl/sharedStrings.xml").decode("utf-8")
+    assert "&apos;=HYPERLINK" in strings
+    assert "&apos;@SUM(1+1)" in strings
+    assert "&apos;+1234567890" in strings
+    assert "&apos;-2+3" in strings
+
+
+@pytest.mark.skipif(_SOFFICE is None, reason="LibreOffice is not installed here")
+def test_control_unescaped_csv_really_does_execute(tmp_path):
+    """The control that makes the test above mean something.
+
+    Written with the SAME hostile values but WITHOUT our escaping, the
+    spreadsheet must actually execute them. If this test ever stops failing
+    to execute -- i.e. if it finds no formula -- then the reader is not
+    evaluating formulas at all and its sibling above proves nothing.
+    """
+    path = tmp_path / "control.csv"
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["display_name", "url", "n"])
+        writer.writerows(_HOSTILE_ROWS)
+
+    sheet = _sheet_xml(_to_xlsx(path))
+
+    assert "<f" in sheet, (
+        "the control did not execute -- this reader does not evaluate "
+        "formulas, so the escaping test above is vacuous"
+    )
+    assert "HYPERLINK(" in sheet
