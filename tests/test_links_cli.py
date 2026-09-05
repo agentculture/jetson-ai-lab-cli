@@ -786,3 +786,301 @@ def test_links_verb_help_text_describes_both_artifacts() -> None:
     help_text = _noun_verb_help("links").lower()
     assert "csv" in help_text
     assert "html" in help_text
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: a --from-cache render states the ORIGINAL scan's metadata, never
+# the current environment's or the current flags'.
+# ---------------------------------------------------------------------------
+
+_OTHER_GUILD_ID = 999888777666555444
+
+
+def test_from_cache_metadata_comes_from_the_cache_not_current_config(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Re-rendering a cache under a DIFFERENT guild id and a DIFFERENT
+    --include-bots setting must still report what the original scan did.
+
+    Before this was fixed, the guild id and the bot-inclusion line were
+    rebuilt from the live environment and the current flags, and the window
+    length and message count were omitted entirely -- a report asserting
+    something it had never measured.
+    """
+    _patch_scan(monkeypatch, _canned_scan(since_days=90, exclude_bots=True))
+    _patch_resolve(monkeypatch)
+
+    assert main(["discord", "links"]) == 0
+    run_id = Path(capsys.readouterr().out.strip()).parent.name
+
+    def _no_scanning(*_a, **_kw):
+        raise AssertionError("--from-cache must not open a Discord scan")
+
+    monkeypatch.setattr(_discord, "scan_window", _no_scanning)
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _OTHER_GUILD_ID)
+
+    # Different guild in the environment AND the opposite bot setting.
+    assert main(["discord", "links", "--from-cache", run_id, "--include-bots"]) == 0
+    html = Path(capsys.readouterr().out.strip()).read_text(encoding="utf-8")
+
+    assert f"<dt>Discord guild id</dt><dd>{_GUILD_ID}</dd>" in html
+    assert str(_OTHER_GUILD_ID) not in html
+    assert "<dt>Bot and webhook authors</dt><dd>excluded</dd>" in html
+    assert "<dt>Window length</dt><dd>90 days</dd>" in html
+    assert "<dt>Messages considered</dt><dd>2</dd>" in html
+
+
+def test_from_cache_metadata_is_unknown_for_a_pre_metadata_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An old cache lacking the metadata renders ``unknown`` -- never invented."""
+    run_id = links_paths.new_run_id()
+    links_cache.write_cache(discord_cmd._cache_run_id(run_id), [])
+
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _OTHER_GUILD_ID)
+    _patch_resolve(monkeypatch)
+
+    assert main(["discord", "links", "--from-cache", run_id]) == 0
+    html = Path(capsys.readouterr().out.strip()).read_text(encoding="utf-8")
+
+    assert "<dt>Discord guild id</dt><dd>unknown</dd>" in html
+    assert "<dt>Bot and webhook authors</dt><dd>unknown</dd>" in html
+    assert "<dt>Window length</dt><dd>unknown days</dd>" in html
+    assert "<dt>Messages considered</dt><dd>unknown</dd>" in html
+    assert str(_OTHER_GUILD_ID) not in html
+
+
+def test_from_cache_json_metadata_comes_from_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_scan(monkeypatch, _canned_scan(since_days=90, exclude_bots=True))
+    _patch_resolve(monkeypatch)
+    assert main(["discord", "links"]) == 0
+    run_id = Path(capsys.readouterr().out.strip()).parent.name
+
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _OTHER_GUILD_ID)
+    _forbid_downstream(monkeypatch)
+
+    rc = main(["discord", "links", "--from-cache", run_id, "--include-bots", "--json"])
+    assert rc == 0
+    raw_out = capsys.readouterr().out
+    payload = json.loads(raw_out)
+
+    assert payload["guild_id"] == str(_GUILD_ID)
+    assert payload["since_days"] == 90
+    assert payload["include_bots"] is False
+    # still id-only.
+    assert "display_name" not in raw_out
+
+
+# ---------------------------------------------------------------------------
+# Finding 6: a malformed cache is the user's environment, not our bug.
+# ---------------------------------------------------------------------------
+
+
+def _write_raw_cache(run_id: str, payload: object) -> None:
+    path = links_paths.links_report_path(
+        discord_cmd._cache_run_id(run_id), links_cache.CACHE_FILENAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"records": []}, id="missing-scanned_at"),
+        pytest.param(["not", "an", "object"], id="wrong-top-level-type"),
+        pytest.param({"scanned_at": "2026-06-01T00:00:00+00:00"}, id="missing-records"),
+        pytest.param(
+            {"scanned_at": "2026-06-01T00:00:00+00:00", "records": "nope"},
+            id="records-not-a-list",
+        ),
+        pytest.param(
+            {"scanned_at": "2026-06-01T00:00:00+00:00", "records": [1, 2]},
+            id="records-not-objects",
+        ),
+        pytest.param(
+            {"scanned_at": "not a timestamp", "records": []},
+            id="unparseable-scanned_at",
+        ),
+        pytest.param({"scanned_at": 12345, "records": []}, id="scanned_at-not-a-string"),
+        pytest.param(
+            {"scanned_at": "2026-06-01T00:00:00+00:00", "records": [], "coverage": []},
+            id="coverage-not-an-object",
+        ),
+        pytest.param(
+            {"scanned_at": "2026-06-01T00:00:00+00:00", "records": [], "scan_meta": 7},
+            id="scan_meta-not-an-object",
+        ),
+    ],
+)
+def test_malformed_cache_is_a_clean_user_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    payload: object,
+) -> None:
+    run_id = links_paths.new_run_id()
+    _write_raw_cache(run_id, payload)
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+
+    rc = main(["discord", "links", "--from-cache", run_id])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+    assert "Traceback" not in captured.err
+    # NOT the generic dispatcher's "file a bug" fallback.
+    assert "unexpected" not in captured.err.lower()
+    assert "KeyError" not in captured.err
+    assert "TypeError" not in captured.err
+    assert "AttributeError" not in captured.err
+
+
+def test_cache_that_is_not_json_at_all_is_a_user_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = links_paths.new_run_id()
+    path = links_paths.links_report_path(
+        discord_cmd._cache_run_id(run_id), links_cache.CACHE_FILENAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json at all", encoding="utf-8")
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+
+    assert main(["discord", "links", "--from-cache", run_id]) == 1
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "hint:" in err
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: unreadable is an ENVIRONMENT failure (2); bad input stays (1).
+# ---------------------------------------------------------------------------
+
+
+def test_unreadable_cache_file_is_an_environment_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = links_paths.new_run_id()
+    links_cache.write_cache(discord_cmd._cache_run_id(run_id), [])
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+
+    def _denied(*_a, **_kw):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(discord_cmd._links_cache_mod, "load_cache", _denied)
+
+    rc = main(["discord", "links", "--from-cache", run_id])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "hint:" in err
+    assert "Traceback" not in err
+
+
+def test_missing_cache_stays_a_user_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+    assert main(["discord", "links", "--from-cache", "20260101T000000Z-deadbeef"]) == 1
+
+
+def test_malformed_run_id_is_a_user_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The run id comes from --from-cache: a bad one is bad input (1), not a
+    broken environment (2)."""
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+
+    rc = main(["discord", "links", "--from-cache", "../../etc/passwd"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: artifact writes that fail on disk are sanitized CliErrors.
+# ---------------------------------------------------------------------------
+
+_RAW_OS_TEXT = "No space left on device: '/home/somebody/secret/path'"
+
+
+def test_cache_write_failure_is_a_sanitized_environment_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_scan(monkeypatch)
+    _patch_resolve(monkeypatch)
+
+    def _boom(*_a, **_kw):
+        raise OSError(28, _RAW_OS_TEXT)
+
+    monkeypatch.setattr(discord_cmd._links_cache_mod, "write_cache", _boom)
+
+    rc = main(["discord", "links"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+    assert "Traceback" not in captured.err
+    assert "unexpected" not in captured.err.lower()
+    assert "secret" not in captured.err
+
+
+def test_report_write_failure_is_a_sanitized_environment_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _patch_scan(monkeypatch)
+    _patch_resolve(monkeypatch)
+
+    def _boom(*_a, **_kw):
+        raise OSError(30, _RAW_OS_TEXT)
+
+    monkeypatch.setattr(discord_cmd._links_report_mod, "write_report", _boom)
+
+    rc = main(["discord", "links"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+    assert "Traceback" not in captured.err
+    assert "unexpected" not in captured.err.lower()
+    assert "secret" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# SonarCloud: no implicitly concatenated string fragments in the cache hint.
+# ---------------------------------------------------------------------------
+
+
+def test_cache_error_hint_has_no_glued_words(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+    run_id = links_paths.new_run_id()
+    path = links_paths.links_report_path(
+        discord_cmd._cache_run_id(run_id), links_cache.CACHE_FILENAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", encoding="utf-8")
+
+    assert main(["discord", "links", "--from-cache", run_id]) == 1
+    err = capsys.readouterr().err
+    assert "without--from-cache" not in err
+    assert "without --from-cache" in err
