@@ -233,5 +233,14 @@ skills.local.yaml
 .colleague/
 
 # Discord members report: person-level community data, local-artifact only,
-# never committed. See jlab/members/paths.py.
+# never committed. See jlab/members/paths.py. This directory rule already
+# covers any CSVs written alongside the HTML report, but the CSV glob below
+# is kept too, spelled out explicitly per the links-report build plan (t3).
 /data/reports/members/
+/data/reports/members/*.csv
+
+# Discord links report: URLs and author ids scraped from public channels,
+# local-artifact only, never committed. Sibling directory to the members
+# report above — the members rule does not cover it. See
+# jlab/links/paths.py.
+/data/reports/links/
