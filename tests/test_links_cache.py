@@ -301,3 +301,80 @@ def test_old_shape_cache_without_coverage_key_still_loads() -> None:
     payload = links_cache.load_cache(run_id)
     assert payload["records"] == _RECORDS
     assert payload.get("coverage") is None
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: the ORIGINAL scan's metadata travels with the cache.
+# ---------------------------------------------------------------------------
+
+
+def test_write_cache_persists_scan_metadata() -> None:
+    run_id = _run_id("f5a")
+    links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        scan_meta=_SCAN_RESULT,
+    )
+    payload = links_cache.load_cache(run_id)
+
+    meta = payload["scan_meta"]
+    assert meta["guild_id"] == _SCAN_RESULT["guild_id"]
+    assert meta["since_days"] == 90
+    assert meta["exclude_bots"] is True
+    assert meta["message_count"] == 42
+
+
+def test_cached_scan_meta_is_trimmed_not_the_whole_scan_result() -> None:
+    run_id = _run_id("f5b")
+    links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        scan_meta=_SCAN_RESULT,
+    )
+    payload = links_cache.load_cache(run_id)
+
+    assert "channels" not in payload["scan_meta"]
+    assert "concurrency" not in payload["scan_meta"]
+
+
+def test_scan_meta_key_is_absent_when_not_supplied() -> None:
+    """Backward compatibility, the ``coverage`` precedent exactly: an absent
+    field is not written at all, so the old on-disk shape is unchanged."""
+    run_id = _run_id("f5c")
+    path = links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert "scan_meta" not in on_disk
+
+
+def test_old_shape_cache_without_scan_meta_still_loads() -> None:
+    run_id = _run_id("f5d")
+    path = links_report_path(run_id, links_cache.CACHE_FILENAME)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"scanned_at": "2026-06-03T00:00:00+00:00", "records": _RECORDS}),
+        encoding="utf-8",
+    )
+
+    payload = links_cache.load_cache(run_id)
+    assert payload["records"] == _RECORDS
+    assert payload.get("scan_meta") is None
+
+
+def test_scan_meta_is_only_partially_written_when_scan_result_is_partial() -> None:
+    """A scan result missing a field contributes no key -- never a made-up one."""
+    run_id = _run_id("f5e")
+    links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        scan_meta={"guild_id": "42"},
+    )
+    payload = links_cache.load_cache(run_id)
+
+    assert payload["scan_meta"] == {"guild_id": "42"}

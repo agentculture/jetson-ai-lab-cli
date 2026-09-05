@@ -38,6 +38,18 @@ at all, and :func:`load_cache` returns such a payload unchanged --
 callers that read ``payload.get("coverage")`` see ``None`` and fall back
 to rendering ``unknown``, exactly as before.
 
+Cached the same way, and for the same reason: the *rest* of the scan's
+self-description (:data:`_SCAN_META_KEYS`) -- ``guild_id``, ``since_days``,
+``exclude_bots``, ``message_count`` -- stored under a ``scan_meta`` key.
+A ``--from-cache`` render has no scan to read those from, and rebuilding
+them from the environment and flags *of the re-render* produces a report
+whose metadata contradicts its own records: change ``JLAB_GUILD_ID`` or
+pass ``--include-bots`` and the page would claim a guild and a bot policy
+the cached records were never gathered under. Caching them is what keeps
+the report's header a statement about the scan that actually happened.
+``scan_meta`` is optional and additive on exactly the ``coverage`` terms
+above -- absent field, absent key, ``unknown`` at render time.
+
 Scan time vs. render time
 --------------------------
 
@@ -106,12 +118,32 @@ _COVERAGE_KEYS: tuple[str, ...] = (
     "complete",
 )
 
+# The remaining scan_window() fields the report's metadata block states as
+# fact -- which guild was read, how long a window, whether bots were kept,
+# and how many messages were considered. They are cached for exactly the
+# reason the coverage fields are: on a --from-cache render there is no scan
+# to read them from, and reconstructing them from the CURRENT environment
+# and the CURRENT flags makes the report assert something it never
+# measured. Like the coverage keys these are all scalars -- no channel
+# list, no message content.
+_SCAN_META_KEYS: tuple[str, ...] = (
+    "guild_id",
+    "since_days",
+    "exclude_bots",
+    "message_count",
+)
 
-def _trim_coverage(scan_result: dict[str, Any] | None) -> dict[str, Any]:
-    """Keep only the coverage fields :data:`_COVERAGE_KEYS` names."""
+
+def _trim(scan_result: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any]:
+    """Keep only the fields *keys* names, and only those actually present.
+
+    A field the scan result does not carry contributes no key at all, so a
+    consumer sees its absence and renders ``unknown`` rather than reading
+    an invented default.
+    """
     if not scan_result:
         return {}
-    return {key: scan_result[key] for key in _COVERAGE_KEYS if key in scan_result}
+    return {key: scan_result[key] for key in keys if key in scan_result}
 
 
 def write_cache(
@@ -120,6 +152,7 @@ def write_cache(
     *,
     scanned_at: datetime | None = None,
     coverage: dict[str, Any] | None = None,
+    scan_meta: dict[str, Any] | None = None,
     filename: str = CACHE_FILENAME,
 ) -> Path:
     """Persist *records* (an :func:`extract_links` payload) for *run_id*.
@@ -138,6 +171,18 @@ def write_cache(
     written; no ``coverage`` key is added to the file in that case, so an
     old caller/consumer sees no shape change.
 
+    *scan_meta* is the same ``scan_window()`` result again, trimmed instead
+    to :data:`_SCAN_META_KEYS` -- the guild that was read, the window
+    length, whether bots were excluded, and how many messages were
+    considered -- and stored under a ``scan_meta`` key. It follows the
+    ``coverage`` precedent exactly: a field the scan result does not carry
+    is not written, an omitted *scan_meta* adds no key at all, and a
+    consumer reading ``payload.get("scan_meta")`` on an older cache sees
+    ``None`` and renders ``unknown``. Caching it is what stops a
+    ``--from-cache`` render from restating the *current* guild id or the
+    *current* ``--include-bots`` flag as though the original scan had used
+    them.
+
     Written atomically via :func:`jlab.atomic_writeset.write_artifact_set`
     onto *run_id*'s own directory, so a crash mid-write cannot leave a
     truncated cache file in place. Returns the path the cache was written
@@ -153,9 +198,12 @@ def write_cache(
         "scanned_at": when.isoformat(),
         "records": records,
     }
-    trimmed = _trim_coverage(coverage)
-    if trimmed:
-        payload["coverage"] = trimmed
+    trimmed_coverage = _trim(coverage, _COVERAGE_KEYS)
+    if trimmed_coverage:
+        payload["coverage"] = trimmed_coverage
+    trimmed_meta = _trim(scan_meta, _SCAN_META_KEYS)
+    if trimmed_meta:
+        payload["scan_meta"] = trimmed_meta
     text = json.dumps(payload, indent=2, sort_keys=True)
 
     dest_dir = links_run_dir(run_id)
@@ -176,7 +224,13 @@ def load_cache(run_id: str, *, filename: str = CACHE_FILENAME) -> dict[str, Any]
     ``coverage`` key is present too; a cache written without them -- or
     written before this key existed -- simply has no ``coverage`` key, and
     this function does not invent one: callers should use
-    ``payload.get("coverage")``.
+    ``payload.get("coverage")``. The ``scan_meta`` key behaves identically.
+
+    This is a *read*, not a validator: the JSON on disk is returned as it
+    parses, whatever shape that is. A caller that must trust the payload's
+    shape (``records``, ``scanned_at``) is responsible for checking it and
+    reporting a corrupt cache as such -- see
+    ``jlab.cli._commands.discord._load_links_cache``.
     """
     path = links_report_path(run_id, filename)
     with path.open("r", encoding="utf-8") as handle:

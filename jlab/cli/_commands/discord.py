@@ -9,10 +9,9 @@ Read-only only (no post/react/thread). Public channels only by default
 from __future__ import annotations
 
 import argparse
-import json as _json
 
 from jlab.cli import _discord
-from jlab.cli._errors import EXIT_USER_ERROR, CliError
+from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
 from jlab.links import cache as _links_cache_mod
 from jlab.links import extract as _links_extract_mod
@@ -208,10 +207,70 @@ def cmd_discord_members(args: argparse.Namespace) -> int | None:
 # -- links ------------------------------------------------------------------
 
 
-def _load_links_cache(run_id: str) -> dict:
-    """Load a cached extraction payload, or fail with a clean ``CliError``."""
+_REBUILD_HINT = (
+    "delete that run's cache directory under data/reports/links/ and re-run "
+    "without --from-cache to rebuild it"
+)
+
+
+def _corrupt_cache(run_id: str, detail: str) -> CliError:
+    """A cache file that parses but is not a cache: the user's data, not a bug.
+
+    Deliberately :data:`EXIT_USER_ERROR`, not the environment code: nothing
+    about the machine is broken, the file handed to ``--from-cache`` just
+    isn't a usable cache. And deliberately *not* the generic dispatcher
+    fallback -- letting a ``KeyError`` bubble out of here would tell the
+    user to file a bug against a corrupt file of their own.
+    """
+    return CliError(
+        EXIT_USER_ERROR,
+        f"cached links run {run_id!r} is not a usable cache: {detail}",
+        _REBUILD_HINT,
+    )
+
+
+def _validate_links_cache(payload: object, run_id: str) -> dict:
+    """Check a loaded cache's shape *inside* the loading boundary.
+
+    :func:`jlab.links.cache.load_cache` returns whatever the JSON parses
+    to. Every downstream read -- ``payload["records"]``, parsing
+    ``scanned_at`` -- would otherwise raise ``KeyError`` / ``TypeError`` /
+    ``ValueError`` / ``AttributeError`` well outside any handler, and the
+    dispatcher's catch-all would render it as an unexpected internal
+    failure. Checking here keeps a corrupt cache a clean, named user error.
+    """
+    if not isinstance(payload, dict):
+        raise _corrupt_cache(run_id, "its top-level value is not a JSON object")
+
+    records = payload.get("records")
+    if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+        raise _corrupt_cache(run_id, "its 'records' key is missing or is not a list of objects")
+
+    if not isinstance(payload.get("scanned_at"), str):
+        raise _corrupt_cache(run_id, "its 'scanned_at' key is missing or is not a string")
     try:
-        return _links_cache_mod.load_cache(_cache_run_id(run_id))
+        _links_cache_mod.cache_scanned_at(payload)
+    except (TypeError, ValueError):
+        raise _corrupt_cache(run_id, "its 'scanned_at' value is not an ISO 8601 timestamp")
+
+    for key in ("coverage", "scan_meta"):
+        value = payload.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise _corrupt_cache(run_id, f"its {key!r} key is not a JSON object")
+
+    return payload
+
+
+def _load_links_cache(run_id: str) -> dict:
+    """Load and shape-check a cached extraction payload, or fail cleanly.
+
+    The three failure modes are kept apart because their exit codes differ
+    (see :mod:`jlab.cli._errors`): a missing cache, a malformed run id and
+    a corrupt cache are all bad *input* (1); an unreadable file -- wrong
+    permissions, a bad mount, an I/O error -- is the *environment* (2).
+    """
+    try:
+        payload = _links_cache_mod.load_cache(_cache_run_id(run_id))
     except FileNotFoundError:
         raise CliError(
             EXIT_USER_ERROR,
@@ -219,12 +278,29 @@ def _load_links_cache(run_id: str) -> dict:
             "list data/reports/links/ for the run ids that have a "
             f"'{_CACHE_RUN_SUFFIX}' directory, or re-run without --from-cache",
         )
-    except (OSError, ValueError, _json.JSONDecodeError) as exc:
+    except OSError:
+        raise CliError(
+            EXIT_ENV_ERROR,
+            f"the cache file for links run {run_id!r} could not be read",
+            "check that the file and data/reports/links/ are readable by this "
+            "user, then retry — or re-run without --from-cache to rebuild it",
+        )
+    except ValueError:
+        # json.JSONDecodeError is a ValueError; catching the subclass too
+        # would be redundant (python:S5713).
+        raise _corrupt_cache(run_id, "the file is not valid JSON")
+    except CliError:
+        # jlab.links.paths refuses a run id that is not a bare path segment
+        # and calls that an environment error. Reached from --from-cache it
+        # is bad *input* -- the user typed the run id.
         raise CliError(
             EXIT_USER_ERROR,
-            f"cached links run {run_id!r} could not be read: {exc}",
-            "the cache file is unreadable or corrupt; re-run without " "--from-cache to rebuild it",
+            f"--from-cache run id {run_id!r} is not a valid run id",
+            "pass a plain run id like '20260905T101112Z-1a2b3c4d', "
+            "as printed on stderr by a previous run",
         )
+
+    return _validate_links_cache(payload, run_id)
 
 
 def cmd_discord_links(args: argparse.Namespace) -> int | None:
@@ -250,14 +326,16 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
 
     ``--from-cache <run-id>`` re-renders a previous run's extraction without
     opening a Discord scan at all. The cache carries the extraction payload,
-    the instant the scan ran, and a trimmed copy of that scan's coverage
-    statuses (d3) — so a cached render shows that scan timestamp rather than
-    now, and states the SAME coverage figures the original run reported,
-    never ``unknown`` and never a recomputed number. A cache written before
-    coverage was cached (or written without it) has no coverage fields to
-    show, and the render falls back to ``unknown`` cells rather than
-    guessing. When the cache is older than the attachment-URL expiry window,
-    that is said on stderr.
+    the instant the scan ran, a trimmed copy of that scan's coverage
+    statuses (d3), and the rest of that scan's self-description — guild id,
+    window length, bot policy, message count. **Every** metadata figure a
+    cached render states is read back from there, never from the current
+    environment or the current flags: re-rendering with a different
+    ``JLAB_GUILD_ID`` or the opposite ``--include-bots`` must not change
+    what the report says about the scan that produced its rows. A cache
+    written before those keys existed has nothing to show, and the render
+    falls back to ``unknown`` cells rather than guessing. When the cache is
+    older than the attachment-URL expiry window, that is said on stderr.
     """
     guild_id = _discord._guild_id()
     since_days = int(getattr(args, "since", _discord.DEFAULT_WINDOW_DAYS))
@@ -284,17 +362,23 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
                 "attachment-URL expiry window: addresses badged 'expiring' in "
                 "it have almost certainly stopped resolving"
             )
-        # The cached payload's "coverage" key (if present -- see d3) carries
-        # a trimmed copy of the original scan's own coverage statuses;
-        # merge it in so the report states the SAME figures rather than
-        # falling back to "unknown". An old-shape cache with no "coverage"
-        # key contributes nothing here, and the report renders those cells
-        # as "unknown", same as before.
+        # Every metadata figure the report will state comes from the cache
+        # and ONLY from the cache: the original scan's guild id, window
+        # length, bot policy and message count ("scan_meta") plus its own
+        # coverage statuses ("coverage"). Nothing here may be rebuilt from
+        # `guild_id` or `include_bots` above -- those describe *this*
+        # invocation, and a report that restated them would assert a guild
+        # and a bot policy its records were never gathered under. A cache
+        # written before these keys existed contributes nothing, and the
+        # report renders those cells "unknown" rather than inventing them.
         scan_result = {
-            "guild_id": str(guild_id),
-            "exclude_bots": not include_bots,
+            **(payload.get("scan_meta") or {}),
             **(payload.get("coverage") or {}),
         }
+        report_guild_id = scan_result.get("guild_id")
+        report_since_days = scan_result.get("since_days")
+        cached_exclude_bots = scan_result.get("exclude_bots")
+        report_include_bots = None if cached_exclude_bots is None else not cached_exclude_bots
     else:
         emit_diagnostic(
             f"scanning public text channels for the last {since_days} days "
@@ -308,15 +392,20 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
         )
         records = _links_extract_mod.extract_links(scan_result, include_bots=include_bots)
         run_id = _links_paths_mod.new_run_id()
+        report_guild_id = str(guild_id)
+        report_since_days = since_days
+        report_include_bots = include_bots
 
     if json_mode:
         # id-only: stop here, never touch resolve_authors, the cache or the
-        # report writer.
+        # report writer. The three metadata fields describe the scan these
+        # records came from -- restored from the cache on a --from-cache
+        # run, null when that cache predates them.
         emit_result(
             {
-                "guild_id": str(guild_id),
-                "since_days": since_days,
-                "include_bots": include_bots,
+                "guild_id": report_guild_id,
+                "since_days": report_since_days,
+                "include_bots": report_include_bots,
                 "records": records,
             },
             json_mode=True,
@@ -324,7 +413,24 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
         return None
 
     if run_id is not None:
-        _links_cache_mod.write_cache(_cache_run_id(run_id), records, coverage=scan_result)
+        try:
+            _links_cache_mod.write_cache(
+                _cache_run_id(run_id),
+                records,
+                coverage=scan_result,
+                scan_meta=scan_result,
+            )
+        except OSError:
+            # Sanitized deliberately: the raw OSError carries a filesystem
+            # path and an errno string that are noise to the caller and
+            # would leak an absolute path into stderr.
+            raise CliError(
+                EXIT_ENV_ERROR,
+                "this run's links extraction cache could not be written to disk",
+                "check that data/reports/links/ exists, is writable by this "
+                "user, and that the filesystem is not full or read-only, then "
+                "re-run",
+            )
         emit_diagnostic(
             f"cached this run's extraction as {run_id} "
             f"(re-render it with --from-cache {run_id})"
@@ -342,13 +448,21 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
     )
     resolved = {aid: r.to_dict() for aid, r in resolve_result.resolved.items()}
 
-    path = _links_report_mod.write_report(
-        scan_result,
-        records,
-        resolved=resolved,
-        generated_at=generated_at,
-        run_id=run_id,
-    )
+    try:
+        path = _links_report_mod.write_report(
+            scan_result,
+            records,
+            resolved=resolved,
+            generated_at=generated_at,
+            run_id=run_id,
+        )
+    except OSError:
+        raise CliError(
+            EXIT_ENV_ERROR,
+            "this run's links report could not be written to disk",
+            "check that data/reports/links/ exists, is writable by this user, "
+            "and that the filesystem is not full or read-only, then re-run",
+        )
     emit_result(str(path), json_mode=False)
     return None
 
