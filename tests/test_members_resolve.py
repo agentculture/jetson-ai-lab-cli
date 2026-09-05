@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from jlab.cli import _discord
+from jlab.cli._errors import CliError
 from jlab.members import resolve
 
 _GUILD_ID = 1326246312072581160
@@ -244,3 +245,44 @@ def test_empty_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.total_authors == 0
     assert result.included_author_ids == []
     assert result.to_dict()["resolved"] == {}
+
+
+def test_resolution_is_bounded_by_the_semaphore(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Member lookups run concurrently but never exceed the bound.
+
+    Regression: this stage was a sequential `for` loop and measured 286s of a
+    302s run (869 authors at ~329ms each). Bounding it is the fix; this test
+    pins BOTH halves — it is actually concurrent, and it is actually bounded.
+    """
+    peak = 0
+    live = 0
+
+    class _SlowGuild:
+        async def fetch_member(self, user_id: int) -> object:
+            nonlocal peak, live
+            live += 1
+            peak = max(peak, live)
+            try:
+                await asyncio.sleep(0.01)
+                return _FakeMember(f"u{user_id}")
+            finally:
+                live -= 1
+
+    class _Client:
+        async def fetch_guild(self, _gid: int) -> object:
+            return _SlowGuild()
+
+    monkeypatch.setattr(resolve._discord, "_run", lambda action: asyncio.run(action(_Client())))
+    ids = {str(i): None for i in range(1, 21)}
+    result = resolve.resolve_authors(1, ids, concurrency=4)
+
+    assert peak > 1, "lookups did not run concurrently — the sequential loop is back"
+    assert peak <= 4, f"concurrency bound exceeded: peak {peak} > 4"
+    assert result.total_authors == 20
+    assert list(result.resolved.keys()) == list(ids.keys()), "input order not preserved"
+
+
+def test_bad_resolve_concurrency_is_a_user_error() -> None:
+    with pytest.raises(CliError) as exc:
+        resolve.resolve_authors(1, {}, concurrency=0)
+    assert exc.value.code == 1

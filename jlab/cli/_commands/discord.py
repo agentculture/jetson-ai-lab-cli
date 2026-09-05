@@ -165,6 +165,7 @@ def cmd_discord_members(args: argparse.Namespace) -> int | None:
         guild_id,
         stats_by_author_id,
         include_departed=include_departed,
+        concurrency=concurrency,
     )
     resolved = {aid: r.to_dict() for aid, r in resolve_result.resolved.items()}
 

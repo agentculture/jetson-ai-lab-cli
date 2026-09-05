@@ -231,7 +231,7 @@ def test_discord_members_default_excludes_departed_authors(
     monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
     monkeypatch.setattr(_discord, "scan_window", lambda *a, **kw: _canned_scan())
 
-    def _fake_resolve_authors(guild_id, stats, *, include_departed=False):
+    def _fake_resolve_authors(guild_id, stats, *, include_departed=False, **_kw):
         return _canned_resolve(
             list(stats.keys()), include_departed=include_departed, departed={"222"}
         )
@@ -270,7 +270,7 @@ def test_discord_members_include_departed_flag_keeps_everyone(
     monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
     monkeypatch.setattr(_discord, "scan_window", lambda *a, **kw: _canned_scan())
 
-    def _fake_resolve_authors(guild_id, stats, *, include_departed=False):
+    def _fake_resolve_authors(guild_id, stats, *, include_departed=False, **_kw):
         return _canned_resolve(
             list(stats.keys()), include_departed=include_departed, departed={"222"}
         )
@@ -384,3 +384,40 @@ def test_discord_members_rejects_bad_since_via_scan_window(
 
     rc = main(["discord", "members", "--since", "0"])
     assert rc == 1
+
+
+def test_concurrency_flag_reaches_the_resolve_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``--concurrency`` bounds name resolution too, not just the channel scan.
+
+    Resolution used to be a sequential loop and dominated the run; it is now
+    bounded by the same flag, so the pass-through is part of the contract.
+    """
+    monkeypatch.setattr(_discord, "_guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(_discord, "scan_window", lambda *a, **kw: _canned_scan())
+
+    seen = {}
+
+    def _fake_resolve_authors(guild_id, stats, *, include_departed=False, **kwargs):
+        seen.update(kwargs)
+        return _canned_resolve(list(stats.keys()), include_departed=include_departed)
+
+    monkeypatch.setattr(
+        "jlab.cli._commands.discord._resolve_mod.resolve_authors",
+        _fake_resolve_authors,
+    )
+
+    def _fake_write_report(aggregate, **kwargs):
+        out = tmp_path / "r.html"
+        out.write_text("<html></html>", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(
+        "jlab.cli._commands.discord._report_mod.write_report",
+        _fake_write_report,
+    )
+
+    assert main(["discord", "members", "--concurrency", "9"]) == 0
+    assert seen["concurrency"] == 9
