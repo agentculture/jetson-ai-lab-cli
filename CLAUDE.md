@@ -104,8 +104,11 @@ or any file write is reached — unconditionally, with no flag that changes it.
 Bots and webhooks are excluded by default (`--include-bots` opts them in).
 `--concurrency` controls channel-read fan-out (default 4), matching `members`
 and `active`. `--from-cache <run-id>` re-renders a previous run's cached
-extraction — written alongside the HTML/CSVs in the same run directory — into
-a fresh HTML/CSV pair with no new Discord scan.
+extraction into a fresh HTML/CSV pair with no new Discord scan. The cache
+lives in a **sibling** `<run-id>-cache` directory, not the run's own:
+`atomic_writeset.write_artifact_set` replaces its whole destination directory,
+which is what makes the swap a single atomic rename, so one run directory
+holds exactly one artifact set and the cache needs its own.
 
 **The content-retention inversion, stated plainly.** The members path's rule
 (above) is that message content never survives past aggregation — only counts

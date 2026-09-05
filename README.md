@@ -130,8 +130,10 @@ one run's whole artifact set into its own gitignored, per-run directory: an
 HTML report, a **flat CSV** (one row per share: url, channel, timestamp,
 thread reference, author, jump link), and a derived **summary CSV** (one row
 per distinct URL: share count, first/last seen, channels touched). A cached
-copy of the extraction is written alongside them, so `--from-cache <run-id>`
-can re-render the same run's HTML and CSVs without opening a new Discord scan.
+copy of the extraction is written to a sibling `<run-id>-cache` directory —
+one run directory holds exactly one atomically-written artifact set, so the
+cache cannot share it — and `--from-cache <run-id>` re-renders that run's HTML
+and CSVs without opening a new Discord scan.
 Bots and webhooks are excluded by default; `--include-bots` opts them in.
 **It issues no verdict:** no "most shared" link, no ranked domains, no
 recommended reading — it organizes what was shared and leaves the judgment to
