@@ -20,6 +20,8 @@ than falling back to some other location.
 
 from __future__ import annotations
 
+import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 
 from jlab.cli._errors import EXIT_ENV_ERROR, CliError
@@ -54,9 +56,13 @@ def find_repo_root() -> Path | None:
 
 
 def links_reports_dir() -> Path:
-    """Return the gitignored directory for links-report output.
+    """Return the gitignored PARENT directory that holds one dir per run.
 
-    Creates the directory (and its parents) if it does not exist yet.
+    This directory is shared across runs; it never holds a run's artifacts
+    directly. Each run writes into its own child of it — see
+    :func:`links_run_dir` for why that layout is load-bearing rather than
+    cosmetic. Creates the directory (and its parents) if it does not exist
+    yet.
     Raises :class:`CliError` with :data:`~jlab.cli._errors.EXIT_ENV_ERROR`
     instead of writing anywhere else when no repo root can be resolved —
     scraped data must never be written outside this repo's ignored path,
@@ -77,23 +83,71 @@ def links_reports_dir() -> Path:
     return out_dir
 
 
-def links_report_path(filename: str = _DEFAULT_REPORT_FILENAME) -> Path:
-    """Return the fixed, repo-anchored path for a generated links artifact.
+def new_run_id(now: datetime | None = None) -> str:
+    """Mint a fresh, collision-resistant, filesystem-safe run id.
 
-    ``filename`` may be overridden by callers that need a distinct name
-    (e.g. the flat/summary CSVs, or tests), but is constrained to a bare
-    filename: the report carries scraped URLs and author ids, and
-    containment is the point (c5/h22, c9/h26). A name with any path
-    separator, a parent reference, or an absolute root would escape the
-    gitignored directory, so those are refused rather than normalised.
+    Shape: ``20260905T101112Z-1a2b3c4d`` — a UTC timestamp (sortable, so a
+    listing of the report directory reads chronologically) plus eight hex
+    characters of entropy. The random suffix is what makes concurrent runs
+    safe: two runs starting inside the same second — routine under
+    ``pytest -n auto`` — still get distinct directories, so neither can swap
+    over the other's artifacts.
     """
-    if filename != Path(filename).name or filename in {"", ".", ".."}:
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{secrets.token_hex(4)}"
+
+
+def _require_bare_segment(value: str, kind: str, example: str) -> None:
+    """Refuse anything that is not a single, non-traversing path segment."""
+    if not isinstance(value, str) or value != Path(value).name or value in {"", ".", ".."}:
         raise CliError(
             code=EXIT_ENV_ERROR,
-            message=f"report filename must be a bare filename, got {filename!r}",
+            message=f"{kind} must be a bare path segment, got {value!r}",
             remediation=(
-                "pass a plain name like 'links-report.html' — the report "
-                "path is fixed inside this repository and cannot be redirected"
+                f"pass a plain name like {example!r} — the report path is fixed "
+                "inside this repository and cannot be redirected"
             ),
         )
-    return links_reports_dir() / filename
+
+
+def links_run_dir(run_id: str) -> Path:
+    """Return the per-run subdirectory that holds ONE run's whole artifact set.
+
+    Layout is ``data/reports/links/<run-id>/<artifact>`` — one directory per
+    run, never a shared flat directory. That matters for more than tidiness:
+    :func:`jlab.atomic_writeset.write_artifact_set` replaces its *entire*
+    destination directory with exactly the file set it is handed. Pointed at
+    a shared directory holding independently-named reports, that swap would
+    silently delete every sibling report, and two concurrent runs would race
+    on it. Pointed at a directory that belongs to a single run, the same
+    primitive is exactly right: the run's whole set lands with one
+    ``os.replace`` onto a path nothing else owns.
+
+    The directory is deliberately **not** created here. It is the destination
+    of that rename, and pre-creating it would push the swap into the
+    two-rename (rename-aside-then-rename-in) branch, weakening the guarantee
+    for no reason. Only the shared parent is created (by
+    :func:`links_reports_dir`).
+
+    *run_id* is validated as a bare path segment for the same reason
+    filenames are: a run id carrying a separator or ``..`` would place the
+    run's artifacts outside the gitignored report directory. Hostile run ids
+    are refused, never normalised.
+    """
+    reports_dir = links_reports_dir()
+    _require_bare_segment(run_id, "run id", "20260905T101112Z-1a2b3c4d")
+    return reports_dir / run_id
+
+
+def links_report_path(run_id: str, filename: str = _DEFAULT_REPORT_FILENAME) -> Path:
+    """Return the path of one artifact inside *run_id*'s own run directory.
+
+    Both *run_id* and *filename* are constrained to bare path segments: the
+    report carries scraped URLs and author ids (c5/h22, c9/h26), containment is the point, and a
+    name with any path separator, a parent reference, or an absolute root
+    would escape the gitignored directory — ``links_report_path(run, "../../x.html")``
+    resolved outside the repo entirely before this guard existed — so those
+    are refused rather than normalised.
+    """
+    _require_bare_segment(filename, "report filename", _DEFAULT_REPORT_FILENAME)
+    return links_run_dir(run_id) / filename

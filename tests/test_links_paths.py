@@ -75,8 +75,10 @@ def test_resolution_ignores_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     root = links_paths.find_repo_root()
     assert root == _REPO_ROOT
 
-    report_path = links_paths.links_report_path("cwd-independence.html")
-    assert report_path == _REPO_ROOT / "data" / "reports" / "links" / "cwd-independence.html"
+    report_path = links_paths.links_report_path("run-cwd", "cwd-independence.html")
+    assert report_path == (
+        _REPO_ROOT / "data" / "reports" / "links" / "run-cwd" / "cwd-independence.html"
+    )
     assert _REPO_ROOT in report_path.parents
 
 
@@ -87,10 +89,15 @@ def test_links_reports_dir_is_inside_repo_and_created() -> None:
 
 
 def test_gitignore_covers_every_links_artifact_filename() -> None:
-    """Every file the links verb will write must be shadowed by the ignore rule."""
-    out_dir = links_paths.links_reports_dir()
+    """Every file the links verb will write must be shadowed by the ignore rule.
+
+    Asserted under the per-run subdirectory layout (t15): the artifacts live
+    at ``data/reports/links/<run-id>/<filename>``, so the ignore rule has to
+    shadow that deeper path, not just the flat one.
+    """
+    run_dir = links_paths.links_run_dir(links_paths.new_run_id())
     for filename in _LINKS_ARTIFACT_FILENAMES:
-        _assert_git_ignores(out_dir / filename)
+        _assert_git_ignores(run_dir / filename)
 
 
 def test_gitignore_covers_every_members_csv_filename() -> None:
@@ -102,9 +109,9 @@ def test_gitignore_covers_every_members_csv_filename() -> None:
     plan, so assert directly against filenames rather than trusting the
     directory rule alone.
     """
-    out_dir = members_paths.members_reports_dir()
+    run_dir = members_paths.members_run_dir(members_paths.new_run_id())
     for filename in _MEMBERS_ARTIFACT_FILENAMES:
-        _assert_git_ignores(out_dir / filename)
+        _assert_git_ignores(run_dir / filename)
 
 
 def test_gitignore_rules_are_present_in_the_file() -> None:
@@ -128,7 +135,10 @@ def test_refuses_to_write_when_no_repo_root_is_found(
     assert err.remediation
 
     with pytest.raises(CliError):
-        links_paths.links_report_path()
+        links_paths.links_report_path("run-x")
+
+    with pytest.raises(CliError):
+        links_paths.links_run_dir("run-x")
 
 
 def test_report_filename_cannot_escape_the_contained_directory() -> None:
@@ -143,12 +153,60 @@ def test_report_filename_cannot_escape_the_contained_directory() -> None:
         "",
     ):
         with pytest.raises(CliError) as exc:
-            links_paths.links_report_path(hostile)
+            links_paths.links_report_path("run-1", hostile)
         assert exc.value.code == 2
         assert exc.value.remediation
 
 
 def test_report_filename_accepts_a_bare_name() -> None:
-    """The legitimate override still works."""
-    assert links_paths.links_report_path("other.html").name == "other.html"
-    assert links_paths.links_report_path("other.html").parent == links_paths.links_reports_dir()
+    """The legitimate override still works, inside the run directory."""
+    path = links_paths.links_report_path("run-1", "other.html")
+    assert path.name == "other.html"
+    assert path.parent == links_paths.links_run_dir("run-1")
+
+
+# --- per-run subdirectory layout (t15) -----------------------------------
+
+
+def test_run_dir_is_a_child_of_the_reports_dir() -> None:
+    run_dir = links_paths.links_run_dir("20260905T101112Z-abcdef01")
+    assert run_dir.parent == links_paths.links_reports_dir()
+    assert run_dir.name == "20260905T101112Z-abcdef01"
+
+
+def test_run_dir_is_not_created_eagerly() -> None:
+    """The run directory is an atomic-swap destination, not a mkdir target."""
+    run_dir = links_paths.links_run_dir("never-created-by-path-resolution")
+    assert not run_dir.exists()
+
+
+def test_new_run_id_is_unique_and_a_safe_bare_segment() -> None:
+    ids = {links_paths.new_run_id() for _ in range(200)}
+    assert len(ids) == 200
+    for run_id in ids:
+        assert run_id == Path(run_id).name
+        assert ".." not in run_id
+        assert links_paths.links_run_dir(run_id).parent == links_paths.links_reports_dir()
+
+
+def test_run_id_cannot_escape_the_contained_directory() -> None:
+    """The traversal guard applies to RUN IDS too, not only to filenames."""
+    reports_dir = links_paths.links_reports_dir().resolve()
+    for hostile in (
+        "../../../../tmp/ESCAPED",
+        "../sibling",
+        "sub/dir",
+        "/etc",
+        "..",
+        ".",
+        "",
+    ):
+        with pytest.raises(CliError) as exc:
+            links_paths.links_run_dir(hostile)
+        assert exc.value.code == EXIT_ENV_ERROR
+        assert exc.value.remediation
+
+        with pytest.raises(CliError):
+            links_paths.links_report_path(hostile)
+
+    assert links_paths.links_run_dir("safe").resolve().parent == reports_dir

@@ -46,8 +46,10 @@ def test_resolution_ignores_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     root = members_paths.find_repo_root()
     assert root == _REPO_ROOT
 
-    report_path = members_paths.members_report_path("cwd-independence.html")
-    assert report_path == _REPO_ROOT / "data" / "reports" / "members" / "cwd-independence.html"
+    report_path = members_paths.members_report_path("run-cwd", "cwd-independence.html")
+    assert report_path == (
+        _REPO_ROOT / "data" / "reports" / "members" / "run-cwd" / "cwd-independence.html"
+    )
     assert _REPO_ROOT in report_path.parents
 
 
@@ -88,7 +90,10 @@ def test_refuses_to_write_when_no_repo_root_is_found(
     assert err.remediation
 
     with pytest.raises(CliError):
-        members_paths.members_report_path()
+        members_paths.members_report_path("run-x")
+
+    with pytest.raises(CliError):
+        members_paths.members_run_dir("run-x")
 
 
 def test_report_filename_cannot_escape_the_contained_directory() -> None:
@@ -108,15 +113,68 @@ def test_report_filename_cannot_escape_the_contained_directory() -> None:
         "",
     ):
         with pytest.raises(CliError) as exc:
-            members_paths.members_report_path(hostile)
+            members_paths.members_report_path("run-1", hostile)
         assert exc.value.code == 2
         assert exc.value.remediation
 
 
 def test_report_filename_accepts_a_bare_name() -> None:
-    """The legitimate override still works."""
-    assert members_paths.members_report_path("other.html").name == "other.html"
-    assert (
-        members_paths.members_report_path("other.html").parent
-        == members_paths.members_reports_dir()
-    )
+    """The legitimate override still works, inside the run directory."""
+    path = members_paths.members_report_path("run-1", "other.html")
+    assert path.name == "other.html"
+    assert path.parent == members_paths.members_run_dir("run-1")
+
+
+# --- per-run subdirectory layout (t15) -----------------------------------
+
+
+def test_run_dir_is_a_child_of_the_reports_dir() -> None:
+    """Each run owns a subdirectory; the shared reports dir is only its parent."""
+    run_dir = members_paths.members_run_dir("20260905T101112Z-abcdef01")
+    assert run_dir.parent == members_paths.members_reports_dir()
+    assert run_dir.name == "20260905T101112Z-abcdef01"
+
+
+def test_run_dir_is_not_created_eagerly() -> None:
+    """The run directory is the destination of an atomic swap, not a mkdir target.
+
+    ``write_artifact_set`` renames a fully-written temp directory onto this
+    path. Pre-creating it would push the swap into the two-rename branch and
+    weaken the guarantee, so resolving the path must not create it.
+    """
+    run_dir = members_paths.members_run_dir("never-created-by-path-resolution")
+    assert not run_dir.exists()
+
+
+def test_new_run_id_is_unique_and_a_safe_bare_segment() -> None:
+    ids = {members_paths.new_run_id() for _ in range(200)}
+    assert len(ids) == 200
+    for run_id in ids:
+        assert run_id == Path(run_id).name
+        assert ".." not in run_id
+        # Resolving it must stay inside the reports directory.
+        assert members_paths.members_run_dir(run_id).parent == members_paths.members_reports_dir()
+
+
+def test_run_id_cannot_escape_the_contained_directory() -> None:
+    """The traversal guard applies to RUN IDS too, not only to filenames."""
+    reports_dir = members_paths.members_reports_dir().resolve()
+    for hostile in (
+        "../../../../tmp/ESCAPED",
+        "../sibling",
+        "sub/dir",
+        "/etc",
+        "..",
+        ".",
+        "",
+    ):
+        with pytest.raises(CliError) as exc:
+            members_paths.members_run_dir(hostile)
+        assert exc.value.code == EXIT_ENV_ERROR
+        assert exc.value.remediation
+
+        with pytest.raises(CliError):
+            members_paths.members_report_path(hostile)
+
+    # And nothing hostile ever produced a path outside the reports dir.
+    assert members_paths.members_run_dir("safe").resolve().parent == reports_dir
