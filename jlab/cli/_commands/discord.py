@@ -249,12 +249,15 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
     row, with their id and no display name.
 
     ``--from-cache <run-id>`` re-renders a previous run's extraction without
-    opening a Discord scan at all. The cache carries the extraction payload
-    and the instant the scan ran, nothing else — a cached render therefore
-    shows that scan timestamp rather than now, and states no coverage
-    figures, because the scan's per-channel statuses are not part of the
-    cached payload. When the cache is older than the attachment-URL expiry
-    window, that is said on stderr.
+    opening a Discord scan at all. The cache carries the extraction payload,
+    the instant the scan ran, and a trimmed copy of that scan's coverage
+    statuses (d3) — so a cached render shows that scan timestamp rather than
+    now, and states the SAME coverage figures the original run reported,
+    never ``unknown`` and never a recomputed number. A cache written before
+    coverage was cached (or written without it) has no coverage fields to
+    show, and the render falls back to ``unknown`` cells rather than
+    guessing. When the cache is older than the attachment-URL expiry window,
+    that is said on stderr.
     """
     guild_id = _discord._guild_id()
     since_days = int(getattr(args, "since", _discord.DEFAULT_WINDOW_DAYS))
@@ -281,11 +284,16 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
                 "attachment-URL expiry window: addresses badged 'expiring' in "
                 "it have almost certainly stopped resolving"
             )
-        # The cached payload carries records only; the scan's own coverage
-        # figures are not in it, so nothing is invented in their place.
-        scan_result: dict = {
+        # The cached payload's "coverage" key (if present -- see d3) carries
+        # a trimmed copy of the original scan's own coverage statuses;
+        # merge it in so the report states the SAME figures rather than
+        # falling back to "unknown". An old-shape cache with no "coverage"
+        # key contributes nothing here, and the report renders those cells
+        # as "unknown", same as before.
+        scan_result = {
             "guild_id": str(guild_id),
             "exclude_bots": not include_bots,
+            **(payload.get("coverage") or {}),
         }
     else:
         emit_diagnostic(
@@ -316,7 +324,7 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
         return None
 
     if run_id is not None:
-        _links_cache_mod.write_cache(_cache_run_id(run_id), records)
+        _links_cache_mod.write_cache(_cache_run_id(run_id), records, coverage=scan_result)
         emit_diagnostic(
             f"cached this run's extraction as {run_id} "
             f"(re-render it with --from-cache {run_id})"

@@ -23,6 +23,21 @@ Discord snowflake string, never resolved to a name. Name resolution is a
 render-time concern (see ``jlab/members/resolve.py`` for the sibling
 report's identical posture) and stays entirely outside this module.
 
+Also cached, optionally: a *trimmed* copy of the scan's coverage statuses
+(d3). ``jlab.links.report``'s ``COVERAGE_COLUMNS`` are built from just six
+scalar fields off a ``scan_window()`` result -- ``cutoff``,
+``scanned_text_channels``, ``channels_ok``, ``channels_partial``,
+``channels_failed``, ``complete`` (see :data:`_COVERAGE_KEYS`). Passing
+that same ``scan_window()`` result as ``write_cache(..., coverage=...)``
+stores exactly those six fields under a ``coverage`` key -- no channel
+list, no per-channel reasons, no message content -- so a later
+``--from-cache`` render can state the run's real coverage instead of
+``unknown``. ``coverage`` is optional and additive: a cache written
+without it (or written before this key existed) has no ``coverage`` key
+at all, and :func:`load_cache` returns such a payload unchanged --
+callers that read ``payload.get("coverage")`` see ``None`` and fall back
+to rendering ``unknown``, exactly as before.
+
 Scan time vs. render time
 --------------------------
 
@@ -77,12 +92,34 @@ CACHE_FILENAME = "links-cache.json"
 # already be dead as live.
 ATTACHMENT_URL_EXPIRY_HOURS = 14
 
+# The scan_window() fields jlab.links.report's COVERAGE_COLUMNS are built
+# from (see _coverage_cells / _coverage_note there). Trimming to exactly
+# these keys -- and nothing else off the scan result -- is what makes the
+# cached "coverage" a small, content-free copy rather than a duplicate of
+# the whole scan.
+_COVERAGE_KEYS: tuple[str, ...] = (
+    "cutoff",
+    "scanned_text_channels",
+    "channels_ok",
+    "channels_partial",
+    "channels_failed",
+    "complete",
+)
+
+
+def _trim_coverage(scan_result: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only the coverage fields :data:`_COVERAGE_KEYS` names."""
+    if not scan_result:
+        return {}
+    return {key: scan_result[key] for key in _COVERAGE_KEYS if key in scan_result}
+
 
 def write_cache(
     run_id: str,
     records: list[dict[str, Any]],
     *,
     scanned_at: datetime | None = None,
+    coverage: dict[str, Any] | None = None,
     filename: str = CACHE_FILENAME,
 ) -> Path:
     """Persist *records* (an :func:`extract_links` payload) for *run_id*.
@@ -91,6 +128,15 @@ def write_cache(
     defaults to ``datetime.now(timezone.utc)`` when omitted, so a caller
     that scans and immediately caches doesn't need to thread a timestamp
     through by hand. It is always stored normalised to UTC, ISO 8601.
+
+    *coverage*, when given, is the ``scan_window()`` result the records
+    were extracted from (or any mapping carrying the same keys). Only the
+    handful of fields :data:`_COVERAGE_KEYS` names are kept -- see the
+    module docstring's "Also cached, optionally" section -- and stored
+    under a ``coverage`` key. Omitting *coverage* (the default) writes the
+    same two-key ``{scanned_at, records}`` payload this module has always
+    written; no ``coverage`` key is added to the file in that case, so an
+    old caller/consumer sees no shape change.
 
     Written atomically via :func:`jlab.atomic_writeset.write_artifact_set`
     onto *run_id*'s own directory, so a crash mid-write cannot leave a
@@ -103,10 +149,13 @@ def write_cache(
     else:
         when = when.astimezone(timezone.utc)
 
-    payload = {
+    payload: dict[str, Any] = {
         "scanned_at": when.isoformat(),
         "records": records,
     }
+    trimmed = _trim_coverage(coverage)
+    if trimmed:
+        payload["coverage"] = trimmed
     text = json.dumps(payload, indent=2, sort_keys=True)
 
     dest_dir = links_run_dir(run_id)
@@ -118,11 +167,16 @@ def load_cache(run_id: str, *, filename: str = CACHE_FILENAME) -> dict[str, Any]
     """Load the cache written by :func:`write_cache` for *run_id*.
 
     Never opens a Discord connection or imports anything that would --
-    this is a plain JSON read. Returns a dict with two keys: ``scanned_at``
+    this is a plain JSON read. Returns a dict carrying ``scanned_at``
     (ISO 8601 UTC string -- the scan time, never the load time) and
     ``records`` (the exact list :func:`extract_links` produced, round-
     tripped through JSON with no loss: empty ``{}`` channel/thread refs
-    and ``from_attachment`` booleans survive unchanged).
+    and ``from_attachment`` booleans survive unchanged). When the cache
+    was written with coverage fields (see :func:`write_cache`), a
+    ``coverage`` key is present too; a cache written without them -- or
+    written before this key existed -- simply has no ``coverage`` key, and
+    this function does not invent one: callers should use
+    ``payload.get("coverage")``.
     """
     path = links_report_path(run_id, filename)
     with path.open("r", encoding="utf-8") as handle:
