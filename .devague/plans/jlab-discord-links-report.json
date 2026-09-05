@@ -5,7 +5,7 @@
   "schema_version": 5,
   "status": "exported",
   "created": "2026-09-05T05:21:14Z",
-  "updated": "2026-09-05T05:33:13Z",
+  "updated": "2026-09-05T05:51:13Z",
   "targets": [
     {
       "id": "c1",
@@ -164,7 +164,7 @@
     {
       "id": "c16",
       "kind": "requirement",
-      "text": "URLs are extracted from three sources: message.content by regex, attachments[].url, and embeds[].url. Only the first is available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of the other two \u2014 so the extractor depends on the seam extension in c18.",
+      "text": "URLs are extracted from four sources, all deduped against each other: message.content by regex; attachments[].url; embeds[].url; and the bodies of embeds \u2014 description and field values \u2014 by the same regex. The fourth source exists because the t1 probe measured that link/article embeds carry a url duplicating one already in content, while rich embeds carry url=None and hide their links in description and fields. None of these are available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of them \u2014 so the extractor depends on the seam extension in c18.",
       "deferred": false,
       "deferred_reason": ""
     },
@@ -461,6 +461,34 @@
       "text": "Rendering from the cache produces the same report and CSVs as the run that wrote it, and does so without opening a Discord session for the scan \u2014 provable by making scan_window raise and rendering anyway. The cache itself contains no display name. A cache-rendered report also states the SCAN timestamp on its face, not the render timestamp, so a stale cache is visibly stale and cannot be read as current.",
       "deferred": false,
       "deferred_reason": ""
+    },
+    {
+      "id": "c41",
+      "kind": "requirement",
+      "text": "Embed extraction covers embeds[].url AND the regex-extracted URLs in embed description and field values, with every source deduped against content-derived URLs so an auto-preview embed does not double-count a link already in the message text. The t1 probe measured both halves of the problem: type=link and type=article embeds carry a url that duplicates content, and type=rich embeds carry url=None with their links in the body.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h38",
+      "kind": "honesty",
+      "text": "A URL that appears both in message content and in an auto-generated preview embed produces exactly one link record, and a URL that exists only inside a rich embed's description or fields is extracted.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c42",
+      "kind": "requirement",
+      "text": "Attachment URLs are kept but presented as EPHEMERAL, with the jump link as the durable pointer. The t1 probe measured them expiring 14-22 hours from fetch, independent of message age, because the signature is minted at fetch time \u2014 so the report must say on its face that an attachment URL expires within about a day rather than presenting it as a stable link. Re-running the scan mints fresh signatures, which is what makes the cache in c40 a partial answer only: a cache-rendered report's attachment URLs are as stale as the cache.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h37",
+      "kind": "honesty",
+      "text": "An attachment URL in the report is visibly marked as expiring, with a jump link beside it, in both the HTML and the CSV \u2014 and a report rendered from a cache older than the expiry window says so rather than presenting dead URLs as live.",
+      "deferred": false,
+      "deferred_reason": ""
     }
   ],
   "tasks": [
@@ -486,7 +514,8 @@
         "A serialized message carries attachments[].url, embeds[].url, a jump link, and the id and name of its enclosing channel",
         "A message with a thread carries a thread reference; one without renders an empty reference, never a placeholder or an error",
         "The whole existing tests/test_discord.py plus the members suite pass; every assertion that changed was changed deliberately and no existing verb's documented output changed meaning",
-        "The serializer gains only keys \u2014 no key is renamed or removed \u2014 so existing --json consumers of channels/read/active keep working"
+        "The serializer gains only keys \u2014 no key is renamed or removed \u2014 so existing --json consumers of channels/read/active keep working",
+        "The serializer carries embed description and field bodies, not only embeds[].url, since rich embeds carry url=None and hide their links in the body (t1 probe finding)."
       ],
       "deps": [],
       "covers": [
@@ -563,7 +592,8 @@
         "No second windowed pager is introduced: history() paging logic still exists in exactly one place, jlab/cli/_discord.py",
         "Each record carries url, channel, timestamp, thread reference and author id; no surrounding message text is retained anywhere in the output",
         "Bots are excluded by default and included behind the opt-in flag; the two runs over one window differ only by bot-authored links, with no human-authored link appearing or disappearing",
-        "Two links shared in the same thread are groupable by their thread reference; a link outside any thread has an empty one"
+        "Two links shared in the same thread are groupable by their thread reference; a link outside any thread has an empty one",
+        "Extraction covers four deduped sources: content regex, attachments[].url, embeds[].url, and regex over embed description and field values. A URL appearing both in content and in its auto-preview embed yields exactly one record; a URL existing only inside a rich embed's body is extracted."
       ],
       "deps": [
         "t2",
@@ -579,7 +609,9 @@
         "c21",
         "h4",
         "c2",
-        "h19"
+        "h19",
+        "c41",
+        "h38"
       ],
       "instruction": "Files: jlab/links/extract.py (new), tests/test_links_extract.py (new). Consumes scan_window's output dicts; never calls Discord itself. Retain the URL and its coordinates only \u2014 no surrounding message text. Honour t1's finding about attachment URLs."
     },
@@ -613,7 +645,8 @@
         "The report loads with no network fetch and no script tag, and pyproject.toml still reads dependencies = []",
         "The flat CSV is one row per share; the deduped per-URL summary CSV is derived from it rather than from a second extraction model",
         "A reader given only a CSV, with no access to the HTML, can tell from the CSV alone which window it covers and whether any channel was partial or failed",
-        "Grepping the rendered HTML finds no verdict language: no top, best, most active, most shared or recommended"
+        "Grepping the rendered HTML finds no verdict language: no top, best, most active, most shared or recommended",
+        "Attachment URLs render marked as expiring, with the jump link beside every one, in both the HTML and the CSV \u2014 never presented as stable links."
       ],
       "deps": [
         "t4",
@@ -628,7 +661,9 @@
         "c22",
         "h5",
         "c10",
-        "h27"
+        "h27",
+        "c42",
+        "h37"
       ],
       "instruction": "Files: jlab/links/report.py (new), tests/test_links_report.py (new). Reuse the _esc, _STYLE and _bar_chart patterns from jlab/members/report.py by copying them, not by importing across packages. Sanitise URL schemes before they become hrefs. Derive the summary CSV from the flat table in code."
     },
@@ -641,7 +676,8 @@
         "Rendering from the cache produces the same report and CSVs as the run that wrote it, without opening a Discord session for the scan \u2014 proven by making scan_window raise and rendering anyway",
         "The cache contains author ids and no display names",
         "A cache-rendered report states the scan timestamp on its face, not the render timestamp, so a stale cache is visibly stale",
-        "The cache file is gitignored alongside the HTML and CSVs"
+        "The cache file is gitignored alongside the HTML and CSVs",
+        "A report rendered from a cache older than the attachment expiry window says so, rather than presenting cached attachment URLs as live."
       ],
       "deps": [
         "t3",

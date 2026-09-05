@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-05T04:06:47Z",
-  "updated": "2026-09-05T05:19:01Z",
+  "updated": "2026-09-05T05:50:48Z",
   "claims": [
     {
       "id": "c1",
@@ -287,7 +287,7 @@
     {
       "id": "c16",
       "kind": "requirement",
-      "text": "URLs are extracted from three sources: message.content by regex, attachments[].url, and embeds[].url. Only the first is available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of the other two \u2014 so the extractor depends on the seam extension in c18.",
+      "text": "URLs are extracted from four sources, all deduped against each other: message.content by regex; attachments[].url; embeds[].url; and the bodies of embeds \u2014 description and field values \u2014 by the same regex. The fourth source exists because the t1 probe measured that link/article embeds carry a url duplicating one already in content, while rich embeds carry url=None and hide their links in description and fields. None of these are available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of them \u2014 so the extractor depends on the seam extension in c18.",
       "origin": "llm",
       "status": "confirmed",
       "honesty_conditions": [
@@ -314,6 +314,11 @@
           "text": "URLs are extracted from message.content by regex. That is the only source available today: _serialize_message (jlab/cli/_discord.py:202-211) never reads message.embeds or message.attachments, and a grep for embed/attachment/jump_url across jlab/ returns nothing.",
           "kind": "requirement",
           "reason": "q1 resolved to include attachments and embeds; the original text asserted content-only extraction as the design, which the decision overturned."
+        },
+        {
+          "text": "URLs are extracted from three sources: message.content by regex, attachments[].url, and embeds[].url. Only the first is available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of the other two \u2014 so the extractor depends on the seam extension in c18.",
+          "kind": "requirement",
+          "reason": "t1 probe finding: embeds[].url alone adds duplicates while missing rich-embed links. USER decided to extract embed bodies too and dedupe."
         }
       ]
     },
@@ -716,7 +721,7 @@
     {
       "id": "c36",
       "kind": "assumption",
-      "text": "Discord attachment URLs are assumed to remain reachable after the report is written. I did NOT verify this against the repo or the API \u2014 it is outside what this pass read. Discord has served attachment CDN URLs as signed, expiring links (ex/is/hm query parameters) since 2023; if that holds, the attachment URLs c16 extracts are dead within roughly 24 hours of the scan, and a 90-day report's attachment rows would be near-uniformly broken while looking perfectly valid.",
+      "text": "VERIFIED by the t1 probe against the live guild (2026-09-05): Discord attachment CDN URLs ARE signed and expiring. Every sampled attachment on cdn.discordapp.com carried ex/is/hm parameters and expired 14-22 hours out \u2014 and crucially the expiry is minted at FETCH time, not from the message: a 143-day-old message's attachment URL expired in 14.7h, the same window as a 1.6-day-old one. An attachment URL written into a report is therefore dead within a day, while looking perfectly valid. The durable pointer is the jump link, which the probe confirmed is present on every message.",
       "origin": "llm",
       "status": "confirmed",
       "honesty_conditions": [
@@ -730,7 +735,13 @@
       "hard_questions": [],
       "links": [],
       "instruction": "Verify before building the attachment extractor: fetch one attachment URL from a real message and check for signed expiry parameters. If they expire, either drop attachment URLs, or store the jump link as the durable pointer and mark the attachment URL as ephemeral in the report.",
-      "revisions": []
+      "revisions": [
+        {
+          "text": "Discord attachment URLs are assumed to remain reachable after the report is written. I did NOT verify this against the repo or the API \u2014 it is outside what this pass read. Discord has served attachment CDN URLs as signed, expiring links (ex/is/hm query parameters) since 2023; if that holds, the attachment URLs c16 extracts are dead within roughly 24 hours of the scan, and a 90-day report's attachment rows would be near-uniformly broken while looking perfectly valid.",
+          "kind": "assumption",
+          "reason": "t1 probe executed; the assumption is now a measured fact. Six samples across #member-lounge, #announcements and #model-news."
+        }
+      ]
     },
     {
       "id": "c37",
@@ -805,6 +816,50 @@
       "hard_questions": [],
       "links": [],
       "instruction": "Give the verb a way to render from the cached extraction rather than rescanning (e.g. a --from-cache path or an explicit rescan flag), and assert the cache file is gitignored alongside the HTML and CSVs.",
+      "revisions": []
+    },
+    {
+      "id": "c41",
+      "kind": "requirement",
+      "text": "Embed extraction covers embeds[].url AND the regex-extracted URLs in embed description and field values, with every source deduped against content-derived URLs so an auto-preview embed does not double-count a link already in the message text. The t1 probe measured both halves of the problem: type=link and type=article embeds carry a url that duplicates content, and type=rich embeds carry url=None with their links in the body.",
+      "origin": "llm",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h38",
+          "text": "A URL that appears both in message content and in an auto-generated preview embed produces exactly one link record, and a URL that exists only inside a rich embed's description or fields is extracted.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Either drop embeds[].url and rely on content plus attachments, or extract from embed description/fields as well and dedupe against content-derived URLs. Do not ship embeds[].url alone \u2014 it is the worst of both.",
+      "revisions": [
+        {
+          "text": "Embed URLs are a weaker extraction source than assumed, in two ways the probe measured. Discord's auto-generated preview embeds (type=link, type=article) carry a url that is a preview OF a URL already present in message.content \u2014 extracting both yields duplicates, not additional links. And rich embeds (type=rich, typically bot-posted) carry url=None entirely, with their links living in description and field bodies, so embeds[].url misses them completely. Extracting embeds[].url as specced adds mostly duplicates while still missing the embed links that are genuinely unreachable from content.",
+          "kind": "requirement",
+          "reason": "USER decision: extract embed bodies too, then dedupe."
+        }
+      ]
+    },
+    {
+      "id": "c42",
+      "kind": "requirement",
+      "text": "Attachment URLs are kept but presented as EPHEMERAL, with the jump link as the durable pointer. The t1 probe measured them expiring 14-22 hours from fetch, independent of message age, because the signature is minted at fetch time \u2014 so the report must say on its face that an attachment URL expires within about a day rather than presenting it as a stable link. Re-running the scan mints fresh signatures, which is what makes the cache in c40 a partial answer only: a cache-rendered report's attachment URLs are as stale as the cache.",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [
+        {
+          "id": "h37",
+          "text": "An attachment URL in the report is visibly marked as expiring, with a jump link beside it, in both the HTML and the CSV \u2014 and a report rendered from a cache older than the expiry window says so rather than presenting dead URLs as live.",
+          "status": "confirmed",
+          "instruction": ""
+        }
+      ],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "Mark attachment URLs as expiring in both the HTML and the CSV, and render the jump link beside every one. A cache-rendered report must not present its cached attachment URLs as live.",
       "revisions": []
     }
   ],
@@ -1014,6 +1069,15 @@
       "finding": "The members pipeline drops departed authors by filtering rows on included_author_ids. That is correct where the row IS the person and silently destructive where the row is a link that happens to have a poster; routed to q1 rather than decided here.",
       "seeds": [
         "q1"
+      ]
+    },
+    {
+      "id": "s22",
+      "surface": "challenge pass / t1 probe: live guild attachment + embed sampling (read-only, 100 public text channels, 146 messages)",
+      "finding": "Attachment URLs are signed with ex/is/hm and expire 14-22h from FETCH, independent of message age (143d-old message, 14.7h expiry). jump_url is present on every message sampled. Embed types observed: link and article carry a url that duplicates content; rich carries url=None.",
+      "seeds": [
+        "c36",
+        "c41"
       ]
     }
   ],

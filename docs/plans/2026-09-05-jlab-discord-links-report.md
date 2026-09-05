@@ -22,6 +22,7 @@ slug: `jlab-discord-links-report` · status: `exported` · from frame: `jlab-dis
   - A message with a thread carries a thread reference; one without renders an empty reference, never a placeholder or an error
   - The whole existing tests/`test_discord.py` plus the members suite pass; every assertion that changed was changed deliberately and no existing verb's documented output changed meaning
   - The serializer gains only keys — no key is renamed or removed — so existing --json consumers of channels/read/active keep working
+  - The serializer carries embed description and field bodies, not only embeds\[\].url, since rich embeds carry url=None and hide their links in the body (t1 probe finding).
 
 ### t3 — Contained, gitignored output paths for links artifacts, and the ignore rules for both verbs' CSVs
 
@@ -55,13 +56,14 @@ slug: `jlab-discord-links-report` · status: `exported` · from frame: `jlab-dis
 
 - instruction: Files: jlab/links/extract.py (new), tests/`test_links_extract.py` (new). Consumes `scan_window`'s output dicts; never calls Discord itself. Retain the URL and its coordinates only — no surrounding message text. Honour t1's finding about attachment URLs.
 - depends on: t2, t1
-- covers: c16, h11, c17, h12, c19, h3, c21, h4, c2, h19
+- covers: c16, h11, c17, h12, c19, h3, c21, h4, c2, h19, c41, h38
 - acceptance:
   - URLs are extracted from three sources — message.content by regex, attachments\[\].url and embeds\[\].url — proven by a message whose only URL is an attachment and another whose only URL is in an embed each contributing exactly one link
   - No second windowed pager is introduced: history() paging logic still exists in exactly one place, jlab/cli/`_discord.py`
   - Each record carries url, channel, timestamp, thread reference and author id; no surrounding message text is retained anywhere in the output
   - Bots are excluded by default and included behind the opt-in flag; the two runs over one window differ only by bot-authored links, with no human-authored link appearing or disappearing
   - Two links shared in the same thread are groupable by their thread reference; a link outside any thread has an empty one
+  - Extraction covers four deduped sources: content regex, attachments\[\].url, embeds\[\].url, and regex over embed description and field values. A URL appearing both in content and in its auto-preview embed yields exactly one record; a URL existing only inside a rich embed's body is extracted.
 
 ### t7 — Members report emits CSV tables through the shared writer
 
@@ -77,13 +79,14 @@ slug: `jlab-discord-links-report` · status: `exported` · from frame: `jlab-dis
 
 - instruction: Files: jlab/links/report.py (new), tests/`test_links_report.py` (new). Reuse the `_esc`, `_STYLE` and `_bar_chart` patterns from jlab/members/report.py by copying them, not by importing across packages. Sanitise URL schemes before they become hrefs. Derive the summary CSV from the flat table in code.
 - depends on: t4, t5, t6
-- covers: c11, h9, c34, h30, c22, h5, c10, h27
+- covers: c11, h9, c34, h30, c22, h5, c10, h27, c42, h37
 - acceptance:
   - A message containing a javascript: URL, a data: URL and a URL with embedded HTML renders as inert escaped text with no executable href
   - The report loads with no network fetch and no script tag, and pyproject.toml still reads dependencies = \[\]
   - The flat CSV is one row per share; the deduped per-URL summary CSV is derived from it rather than from a second extraction model
   - A reader given only a CSV, with no access to the HTML, can tell from the CSV alone which window it covers and whether any channel was partial or failed
   - Grepping the rendered HTML finds no verdict language: no top, best, most active, most shared or recommended
+  - Attachment URLs render marked as expiring, with the jump link beside every one, in both the HTML and the CSV — never presented as stable links.
 
 ### t9 — Cached extraction so the report regenerates without a second scan
 
@@ -95,6 +98,7 @@ slug: `jlab-discord-links-report` · status: `exported` · from frame: `jlab-dis
   - The cache contains author ids and no display names
   - A cache-rendered report states the scan timestamp on its face, not the render timestamp, so a stale cache is visibly stale
   - The cache file is gitignored alongside the HTML and CSVs
+  - A report rendered from a cache older than the attachment expiry window says so, rather than presenting cached attachment URLs as live.
 
 ### t10 — Wire the links verb into the discord noun group
 
