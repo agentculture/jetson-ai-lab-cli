@@ -120,10 +120,11 @@ jlab discord links --json                   # id-only extraction, on stdout
 ```
 
 **Why this exists:** the links a community shares are the clearest signal of
-what it's actually reading and working on. For an agent whose job is to fetch
-and index Jetson AI Lab knowledge, the URLs members already vetted for each
-other are a ready-made seed corpus — today they're scattered across 90 days
-and 100 channels with no way to see them in one place.
+what it's actually reading and working on. For an agent whose eventual job is
+to fetch and index Jetson AI Lab knowledge, the URLs members already vetted
+for each other would make a ready-made seed corpus — today they're scattered
+across 90 days and 100 channels with no way to see them in one place, and this
+verb only surfaces them; it doesn't fetch, index, or query anything itself.
 
 This sweeps the same public text channels as `active` and `members` and writes
 one run's whole artifact set into its own gitignored, per-run directory: an
