@@ -1,0 +1,816 @@
+{
+  "slug": "jlab-discord-links-report",
+  "title": "jlab discord links report",
+  "frame_slug": "jlab-discord-links-report",
+  "schema_version": 5,
+  "status": "exported",
+  "created": "2026-09-05T05:21:14Z",
+  "updated": "2026-09-05T05:33:13Z",
+  "targets": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "jlab discord links extracts every URL shared in the Jetson AI Lab Discord's public channels over the last 90 days and renders a local, gitignored HTML report of what the community is sharing",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h1",
+      "kind": "honesty",
+      "text": "A maintainer who runs the verb once, with no flags and no prior setup beyond DISCORD_BOT_TOKEN, gets a report they can read and a CSV they can open \u2014 no second command, no manual assembly step.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c2",
+      "kind": "requirement",
+      "text": "The verb reuses the existing scan stage unchanged: _discord.scan_window (jlab/cli/_discord.py:524-592) already pages the full 90-day window (DEFAULT_WINDOW_DAYS=90) over public text channels with --since/--concurrency, so links needs no new fetch machinery.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h19",
+      "kind": "honesty",
+      "text": "The links verb adds no second windowed pager: a grep of the diff shows history() paging logic still exists in exactly one place, jlab/cli/_discord.py.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c3",
+      "kind": "requirement",
+      "text": "A new jlab/links/ package mirrors jlab/members/ shape: extract.py (URL extraction), report.py (HTML), paths.py (contained output dir). jlab/members/resolve.py is reusable UNCHANGED because it consumes only the KEYS of its stats mapping (resolve.py:204-206).",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h20",
+      "kind": "honesty",
+      "text": "jlab/members/resolve.py is byte-identical before and after the ship, and the links package imports it rather than copying it.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c4",
+      "kind": "requirement",
+      "text": "The explain catalog needs a ('discord','links') entry plus an updated _DISCORD group verb list (jlab/explain/catalog.py:255-261 and 132-137), or tests/test_cli.py::test_every_catalog_path_resolves and 'teken cli doctor . --strict' both fail.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h21",
+      "kind": "honesty",
+      "text": "'uv run jlab explain discord links' resolves, and both tests/test_cli.py::test_every_catalog_path_resolves and 'teken cli doctor . --strict' pass.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c5",
+      "kind": "requirement",
+      "text": ".gitignore needs its own links entry: line 237 is the path-anchored '/data/reports/members/', which does NOT cover a sibling links report directory.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h22",
+      "kind": "honesty",
+      "text": "'git status' after a real links run shows no untracked report files, and git check-ignore succeeds on the written paths.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c6",
+      "kind": "boundary",
+      "text": "Read-only stays absolute. The links path adds no post/react/thread/edit call; its new modules must be added to the _GUARDED_FILES list in tests/test_members_invariants.py:41-48 so the existing write-call regex guard covers them too.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h23",
+      "kind": "honesty",
+      "text": "The write-call regex in tests/test_members_invariants.py runs over the new links modules too \u2014 provable by adding a deliberate .send( to one of them and watching the test fail.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c7",
+      "kind": "boundary",
+      "text": "Public-only stays absolute and stays a PRE-fetch filter. _public_text_channels (jlab/cli/_discord.py:455-467) drops private channels before any history() call, so no private channel's URLs can ever be fetched, let alone rendered.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h24",
+      "kind": "honesty",
+      "text": "A private channel present in the guild is never passed to history() during a links run \u2014 provable with a fake whose history() raises, exactly as tests/test_members_invariants.py:257 does \u2014 and its name and URLs appear nowhere in the output.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c8",
+      "kind": "boundary",
+      "text": "The links report is a CONTENT-RETENTION report, and this is a deliberate inversion of the members path's rule, not an oversight. docs/specs/2026-09-04-jlab-discord-members-report.md:112 states 'Message CONTENT never leaves the aggregation stage' and jlab/members/aggregate.py:12-15 discards the string after measuring its length. A URL is content; links cannot exist under that rule. The inversion must be stated explicitly in the spec, README and CLAUDE.md rather than silently contradicting the sibling feature.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h25",
+      "kind": "honesty",
+      "text": "The exported spec, the README and CLAUDE.md each state in plain words that the links report retains URL content and that this deliberately inverts the members path's no-content rule, so a reader meets the inversion as a decision rather than discovering it as a contradiction.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c9",
+      "kind": "boundary",
+      "text": "Output containment carries over verbatim: a fixed, repo-anchored, gitignored path resolved by walking up to the culture.yaml marker (jlab/members/paths.py:31-71), printing only the path on stdout. Only the subdir constant changes.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h26",
+      "kind": "honesty",
+      "text": "The verb refuses to write when no culture.yaml repo root is found, and a filename containing path separators or .. cannot escape the report directory.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c10",
+      "kind": "boundary",
+      "text": "Zero runtime dependencies holds. dependencies = [] in pyproject.toml:16; the HTML is hand-emitted with the _esc/_STYLE/_bar_chart helpers already proven in jlab/members/report.py. No templating or charting library.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h27",
+      "kind": "honesty",
+      "text": "pyproject.toml still reads dependencies = [] after the ship, and the generated HTML loads and renders with no network access.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c11",
+      "kind": "boundary",
+      "text": "Rendered URLs are a NEW attack surface the members report never had, because links are href-shaped. Hostile schemes (javascript:, data:) must be neutralised and every URL HTML-escaped; the report stays self-contained with no script and no external fetch.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h9",
+      "kind": "honesty",
+      "text": "A message containing a javascript: URL, a data: URL, and a URL with embedded HTML renders in the report as inert escaped text with no executable href, and the report loads with no network fetch and no script tag.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c16",
+      "kind": "requirement",
+      "text": "URLs are extracted from three sources: message.content by regex, attachments[].url, and embeds[].url. Only the first is available today \u2014 _serialize_message (jlab/cli/_discord.py:202-211) reads none of the other two \u2014 so the extractor depends on the seam extension in c18.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h11",
+      "kind": "honesty",
+      "text": "A message whose only URL is an attachment, and a message whose only URL is in an embed, each contribute exactly one link to the report \u2014 proving all three extraction sources are live, not just the regex.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c17",
+      "kind": "requirement",
+      "text": "Bot and webhook handling is decided explicitly for links rather than inherited: excluded by default, includable behind an opt-in flag (see c21). scan_window's exclude_bots (jlab/cli/_discord.py:524-592) is the mechanism; the members spec's blanket exclusion (spec:108-109) informed the default but did not dictate it.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h12",
+      "kind": "honesty",
+      "text": "The default run and the opt-in run over the same window differ only by bot-authored links, with no human-authored link appearing or disappearing between them.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c18",
+      "kind": "requirement",
+      "text": "_serialize_message (jlab/cli/_discord.py:202-211) gains attachments[].url and embeds[].url. Because it is the single serializer behind channels/read/active/members, every existing discord payload changes shape in the same edit \u2014 this is a shared-seam change, not a links-local one.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h2",
+      "kind": "honesty",
+      "text": "After the serializer gains attachments, embeds and jump_url, the existing channels/read/active/members suites all still pass. Any assertion that breaks is updated deliberately, and no existing verb's documented output silently changes meaning.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c19",
+      "kind": "requirement",
+      "text": "Each extracted link record carries url, channel, timestamp, and a thread reference where one applies, so links shared in the same thread can be grouped in the report. No surrounding message text is retained.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h3",
+      "kind": "honesty",
+      "text": "Two links shared in the same thread are visibly grouped in the report, and a link shared outside any thread renders cleanly with an empty thread reference rather than a placeholder or an error.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c21",
+      "kind": "requirement",
+      "text": "Bot and webhook links are excluded by default and included only behind an explicit opt-in flag on the links verb, wired to scan_window's existing exclude_bots parameter.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h4",
+      "kind": "honesty",
+      "text": "Running with no flag yields zero bot-authored links; running with the opt-in yields strictly more links than the default run on the same window, and the report states which mode produced it.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c22",
+      "kind": "requirement",
+      "text": "The report's tables are also written as CSV next to the HTML. The CSVs carry resolved display names, so they are person-level data and must live inside the same repo-anchored, gitignored report directory as the HTML \u2014 never a bare-CWD write.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h5",
+      "kind": "honesty",
+      "text": "git check-ignore returns success for every CSV path the verb writes, not just the .html \u2014 verified by a test that enumerates the actual written filenames rather than asserting a hardcoded directory.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c23",
+      "kind": "boundary",
+      "text": "Display names are resolved in one final batch at render time via the unchanged jlab/members/resolve.py, and both the HTML and the CSVs carry them. --json never reaches that call (c32), so the containment posture matches the members path exactly: names exist only inside the gitignored report directory, never on stdout.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h6",
+      "kind": "honesty",
+      "text": "Inspecting the intermediate scan and extraction data shows author ids only; a display name appears nowhere until the final render step, and an aborted run leaves no file containing a name.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c25",
+      "kind": "requirement",
+      "text": "CSV output is a SHARED capability, not links-only: the members report also emits its tables as CSV alongside its HTML, into the same repo-anchored gitignored directory. Both verbs get the same HTML+CSV pair rather than links growing a second output style the sibling verb lacks.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h7",
+      "kind": "honesty",
+      "text": "The members verb and the links verb produce their CSVs through one shared writer \u2014 a single implementation, not two \u2014 and the members CSVs land in the members report directory, gitignored, in the same commit that adds them.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c26",
+      "kind": "audience",
+      "text": "Jetson AI Lab maintainers and the mesh agents working alongside them \u2014 the same readers the members report serves. They want to see what the community is actually reading and sharing, without joining 100 channels or scrolling 90 days of history by hand.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h14",
+      "kind": "honesty",
+      "text": "A Jetson AI Lab maintainer who has not read this spec can run the verb from the README alone and understand what the report is showing them without asking.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c27",
+      "kind": "after_state",
+      "text": "One invocation of 'jlab discord links' sweeps 90 days of public text channels and writes a local HTML report plus CSV tables of every URL shared \u2014 each with its channel, timestamp, thread reference and the member who posted it \u2014 so a maintainer can see the community's reading list in one page and slice it in a spreadsheet.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h15",
+      "kind": "honesty",
+      "text": "One invocation produces both artifacts \u2014 HTML and CSV \u2014 with no second command and no manual assembly, and every link row carries all six fields (url, channel, timestamp, thread, author, jump link).",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c28",
+      "kind": "before_state",
+      "text": "There is no way to see what has been shared. 'jlab discord read' prints one channel's recent messages and 'jlab discord active' ranks channels by traffic, but neither extracts URLs, and nothing spans the full 90-day window across all public channels. Finding a link someone posted last month means remembering which channel and scrolling.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h16",
+      "kind": "honesty",
+      "text": "The existing 'discord read' and 'discord active' verbs behave exactly as before after the ship; links is purely additive to the noun group even though it reopens the shared serializer.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c29",
+      "kind": "why_it_matters",
+      "text": "The links a community shares are the clearest available signal of what it is actually working on and struggling with. For an agent whose stated purpose is fetching and indexing Jetson AI Lab knowledge, the URLs members already vetted for each other are the highest-value seed corpus available, and today they are unreachable.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h17",
+      "kind": "honesty",
+      "text": "The report's own text says what it is for, so a reader who never sees this frame understands why the links were collected.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c30",
+      "kind": "success_signal",
+      "text": "A single 'jlab discord links' run over the full 90-day window completes within a measured, agreed budget at the default concurrency of 4, and the report states its own coverage: the count of channels ok, partial and failed, so an incomplete sweep is never presented as exhaustive. The budget is NOT YET SET: the 'under 5 minutes' figure previously carried here was invented, never measured, and is recorded as lapse l1 (assumption-for-measurement). The only timing on record is ~13s for 100 channels, which is the SHALLOW active scan and not comparable. Time one real full-window run and set the number from it before treating this signal as a target.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h10",
+      "kind": "honesty",
+      "text": "The report's coverage figures are read off scan_window's own per-channel statuses rather than recomputed, so a partial or failed channel cannot be silently counted as complete.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h34",
+      "kind": "honesty",
+      "text": "The performance number in the shipped spec traces to a timed run, not an estimate \u2014 and until one exists, the spec says so in the success signal itself rather than carrying a figure that reads as measured.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c31",
+      "kind": "requirement",
+      "text": "Each link record carries a jump link back to the Discord message the URL appeared in, so a reader can open the original conversation in one click. This is a third field the shared serializer must supply: a grep for jump_url across jlab/ returns nothing today, and _serialize_message (jlab/cli/_discord.py:202-211) carries neither message.jump_url nor even a channel id \u2014 the message dict has only id/author/content/created_at. The jump link is derivable as https://discord.com/channels/<guild_id>/<channel_id>/<message_id> once channel id is threaded through per c19, so carrying jump_url verbatim from discord.py is a convenience, not a necessity.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h8",
+      "kind": "honesty",
+      "text": "Every link row's jump link, when opened, lands on the message that actually contains that URL \u2014 verified against a real message rather than a constructed fixture before shipping.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c32",
+      "kind": "requirement",
+      "text": "--json is strictly id-only, exactly as the members verb does it: it emits the extraction stage with author ids, urls, channels, timestamps, thread references and jump links, resolves no display names, writes no files, and has no opt-in flag that changes this. Names are produced by a separate call that fetches them from ids \u2014 the unchanged jlab/members/resolve.py batch (guild.fetch_member over a second Discord session), invoked only on the render path immediately before the HTML and CSVs are written. --json returns before that call is ever reached.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h18",
+      "kind": "honesty",
+      "text": "A --json run of the links verb never reaches the name-resolution call and never writes a file, under any flag combination \u2014 provable the way the members path proves it, by making resolve_authors and the report writer raise if reached from the --json path. Display names exist only in the HTML and CSV artifacts, never on stdout.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c33",
+      "kind": "requirement",
+      "text": "CSV output needs its own injection defence, which no existing code provides. jlab/members/report.py's only sanitiser is _esc, which is html.escape(quote=True) \u2014 HTML context only. A CSV field beginning with =, +, -, @, tab or carriage return is executed as a formula by Excel and Google Sheets on open, and both a shared URL and a resolved display name are attacker-controlled text landing in exactly that position. c22's whole rationale is that a maintainer opens these in a spreadsheet, which is precisely the execution context.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h29",
+      "kind": "honesty",
+      "text": "A member whose display name begins with '=' and a shared URL beginning with '@' both open in LibreOffice or Excel as inert text, not as a formula \u2014 verified by opening a generated CSV, not only by asserting on the bytes.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c34",
+      "kind": "requirement",
+      "text": "The CSVs must carry their own coverage metadata. h10 binds the coverage figures to the report, but a CSV has no metadata block and is the artifact most likely to be opened, mailed, or imported on its own. A partial sweep (scan_window's STATUS_PARTIAL, or the max_messages_per_channel cap of 5000 at jlab/cli/_discord.py:48) would then present as a complete dataset with nothing on the face of it saying otherwise.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h30",
+      "kind": "honesty",
+      "text": "A reader given only a CSV, with no access to the HTML, can tell from the CSV alone which window it covers and whether any channel was partial or failed.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c35",
+      "kind": "requirement",
+      "text": "Writing the artifact set must be all-or-nothing. jlab/members/report.py:405 is a bare path.write_text(html) \u2014 fine when the output is one file, but c22 and c25 turn it into an HTML file plus N CSVs written in sequence. A run killed partway (Ctrl-C, a 429 storm, an OOM) leaves a directory holding some artifacts from this run and possibly stale ones from the last, with no marker distinguishing them, and the timestamps will look plausible.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h31",
+      "kind": "honesty",
+      "text": "Killing the verb midway through writing leaves either a complete artifact set or no new artifacts at all \u2014 never a complete HTML beside missing or stale CSVs.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c37",
+      "kind": "requirement",
+      "text": "The links render path must NOT filter rows by resolve_result.included_author_ids the way jlab/cli/_commands/discord.py:172-175 does. A departed poster's link stays in the report carrying its bare author id, with no display name resolved; the author column shows the id. Dropping the row would delete a link because of something that happened to its poster after the share.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h32",
+      "kind": "honesty",
+      "text": "A link shared by someone who has since left the guild appears in both the HTML and the CSV, with its author id present and no display name \u2014 verified with a fake whose fetch_member raises NotFound.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c38",
+      "kind": "requirement",
+      "text": "The canonical CSV is FLAT: one row per share, every cell atomic, no nested lists \u2014 so it loads directly into Google Sheets and into pandas without parsing. A second, deduped per-URL summary CSV is derived from that flat table (share count, first and last seen, channels touched) rather than by complicating the extraction model.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h33",
+      "kind": "honesty",
+      "text": "The flat CSV loads with a stock pandas.read_csv and a stock Google Sheets import with no preprocessing, and every cell in it is a scalar.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c40",
+      "kind": "requirement",
+      "text": "The report and CSVs must be regenerable without a second full scan. One 90-day sweep costs a large share of a bot token shared with other mesh agents (v1), so the extraction stage's output is persisted to the contained report directory and the render stage can run from that cache instead of re-scanning. This is the same id-only payload --json emits (c32), so the cache carries author ids, urls, channels, timestamps, thread references and jump links \u2014 and no display names, making it a strictly smaller privacy surface than the CSVs sitting beside it. It lives in the same repo-anchored gitignored directory and is covered by the same ignore rule; name resolution still happens only on the render path.",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h36",
+      "kind": "honesty",
+      "text": "Rendering from the cache produces the same report and CSVs as the run that wrote it, and does so without opening a Discord session for the scan \u2014 provable by making scan_window raise and rendering anyway. The cache itself contains no display name. A cache-rendered report also states the SCAN timestamp on its face, not the render timestamp, so a stale cache is visibly stale and cannot be read as current.",
+      "deferred": false,
+      "deferred_reason": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "summary": "Probe: verify whether Discord attachment CDN URLs are signed and expiring",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "One real attachment URL is fetched from a live public message and its query string inspected for expiry parameters; the finding is recorded on c36 either way",
+        "If they expire, the decision (drop attachment URLs, or keep them marked as ephemeral with the jump link as the durable pointer) is recorded before any extractor code is written"
+      ],
+      "deps": [],
+      "covers": [],
+      "instruction": "Read-only probe, no repo files. Run 'uv run jlab discord read' against a public channel carrying an attachment, inspect the attachment URL's query string for ex/is/hm-style expiry parameters, and record the finding on c36 via devague. Blocks t2 and t6 only in the sense that its answer shapes them \u2014 do not start the extractor before it lands."
+    },
+    {
+      "id": "t2",
+      "summary": "Extend _serialize_message with attachment URLs, embed URLs, jump link and channel identity",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A serialized message carries attachments[].url, embeds[].url, a jump link, and the id and name of its enclosing channel",
+        "A message with a thread carries a thread reference; one without renders an empty reference, never a placeholder or an error",
+        "The whole existing tests/test_discord.py plus the members suite pass; every assertion that changed was changed deliberately and no existing verb's documented output changed meaning",
+        "The serializer gains only keys \u2014 no key is renamed or removed \u2014 so existing --json consumers of channels/read/active keep working"
+      ],
+      "deps": [],
+      "covers": [
+        "c18",
+        "h2",
+        "c31",
+        "h8"
+      ],
+      "instruction": "Files: jlab/cli/_discord.py, tests/test_discord.py. Extend _serialize_message only; do not touch _public_text_channels or the paging logic. Add keys, never rename or remove one. Thread the enclosing channel's id and name through _channel_row so each message record can name its channel. Expect assertion churn in the members and channels/read/active tests and change each one deliberately."
+    },
+    {
+      "id": "t3",
+      "summary": "Contained, gitignored output paths for links artifacts, and the ignore rules for both verbs' CSVs",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "The links report directory is resolved by walking up from __file__ to the culture.yaml marker, never from the caller's CWD, and the verb refuses to write when no repo root is found",
+        "A filename containing path separators or .. cannot escape the report directory",
+        "git check-ignore succeeds on every path the links verb writes and on the members CSV paths, asserted by enumerating actual written filenames rather than a hardcoded directory"
+      ],
+      "deps": [],
+      "covers": [
+        "c5",
+        "h22",
+        "c9",
+        "h26"
+      ],
+      "instruction": "Files: jlab/links/paths.py (new), .gitignore, tests/test_links_paths.py (new). Copy the pattern in jlab/members/paths.py verbatim \u2014 _REPO_MARKER, walking up from __file__, the traversal guard \u2014 changing only the subdir tuple. Add BOTH ignore rules in this task: the links directory and the members CSVs, so no later task has to edit .gitignore."
+    },
+    {
+      "id": "t4",
+      "summary": "Shared CSV writer with formula-injection defence and a flat, atomic-cell schema",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A field beginning with = + - @ tab or carriage return is prefix-escaped so it opens as inert text, verified by opening a generated CSV in a spreadsheet application, not only by asserting on bytes",
+        "A display name starting with '=' and a URL starting with '@' are both covered by that test",
+        "Every emitted cell is a scalar: no delimiter-joined list appears in any cell, asserted programmatically",
+        "A generated CSV loads with a stock pandas.read_csv and a stock Google Sheets import with no preprocessing",
+        "One implementation serves both the members and links report modules; neither has its own CSV code"
+      ],
+      "deps": [],
+      "covers": [
+        "c33",
+        "h29",
+        "c38",
+        "h33"
+      ],
+      "instruction": "Files: the new shared CSV module and its tests. Neither jlab/members/report.py nor jlab/links/report.py may contain CSV code \u2014 they call this. Prefix-escape any field whose first character is = + - @ tab or CR. Keep it dependency-free: csv from the stdlib, nothing else."
+    },
+    {
+      "id": "t5",
+      "summary": "All-or-nothing writer for a multi-file artifact set",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Killing the write partway leaves either a complete artifact set or no new artifacts at all \u2014 never a complete HTML beside missing or stale CSVs",
+        "The failure path is tested by injecting an exception between file writes and asserting the destination directory is unchanged"
+      ],
+      "deps": [],
+      "covers": [
+        "c35",
+        "h31"
+      ],
+      "instruction": "Files: the new atomic write-set module and its tests. Write into a temp directory and rename into place once every artifact is complete, or give all files one run id. Test the failure path by injecting an exception between writes and asserting the destination is unchanged."
+    },
+    {
+      "id": "t6",
+      "summary": "URL extraction stage: jlab/links/extract.py",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "URLs are extracted from three sources \u2014 message.content by regex, attachments[].url and embeds[].url \u2014 proven by a message whose only URL is an attachment and another whose only URL is in an embed each contributing exactly one link",
+        "No second windowed pager is introduced: history() paging logic still exists in exactly one place, jlab/cli/_discord.py",
+        "Each record carries url, channel, timestamp, thread reference and author id; no surrounding message text is retained anywhere in the output",
+        "Bots are excluded by default and included behind the opt-in flag; the two runs over one window differ only by bot-authored links, with no human-authored link appearing or disappearing",
+        "Two links shared in the same thread are groupable by their thread reference; a link outside any thread has an empty one"
+      ],
+      "deps": [
+        "t2",
+        "t1"
+      ],
+      "covers": [
+        "c16",
+        "h11",
+        "c17",
+        "h12",
+        "c19",
+        "h3",
+        "c21",
+        "h4",
+        "c2",
+        "h19"
+      ],
+      "instruction": "Files: jlab/links/extract.py (new), tests/test_links_extract.py (new). Consumes scan_window's output dicts; never calls Discord itself. Retain the URL and its coordinates only \u2014 no surrounding message text. Honour t1's finding about attachment URLs."
+    },
+    {
+      "id": "t7",
+      "summary": "Members report emits CSV tables through the shared writer",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "The members verb writes CSV tables alongside its HTML, into its existing gitignored report directory",
+        "Members and links produce their CSVs through one shared writer \u2014 a single implementation, not two",
+        "The members CSVs are gitignored, landing in the same commit that adds them"
+      ],
+      "deps": [
+        "t4",
+        "t5"
+      ],
+      "covers": [
+        "c25",
+        "h7"
+      ],
+      "instruction": "Files: jlab/members/report.py, tests/test_members_report.py. Add CSV emission by calling t4's shared writer; change nothing about the existing HTML rendering or the members privacy contract."
+    },
+    {
+      "id": "t8",
+      "summary": "Links report renderer: HTML plus flat and summary CSVs",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "A message containing a javascript: URL, a data: URL and a URL with embedded HTML renders as inert escaped text with no executable href",
+        "The report loads with no network fetch and no script tag, and pyproject.toml still reads dependencies = []",
+        "The flat CSV is one row per share; the deduped per-URL summary CSV is derived from it rather than from a second extraction model",
+        "A reader given only a CSV, with no access to the HTML, can tell from the CSV alone which window it covers and whether any channel was partial or failed",
+        "Grepping the rendered HTML finds no verdict language: no top, best, most active, most shared or recommended"
+      ],
+      "deps": [
+        "t4",
+        "t5",
+        "t6"
+      ],
+      "covers": [
+        "c11",
+        "h9",
+        "c34",
+        "h30",
+        "c22",
+        "h5",
+        "c10",
+        "h27"
+      ],
+      "instruction": "Files: jlab/links/report.py (new), tests/test_links_report.py (new). Reuse the _esc, _STYLE and _bar_chart patterns from jlab/members/report.py by copying them, not by importing across packages. Sanitise URL schemes before they become hrefs. Derive the summary CSV from the flat table in code."
+    },
+    {
+      "id": "t9",
+      "summary": "Cached extraction so the report regenerates without a second scan",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "Rendering from the cache produces the same report and CSVs as the run that wrote it, without opening a Discord session for the scan \u2014 proven by making scan_window raise and rendering anyway",
+        "The cache contains author ids and no display names",
+        "A cache-rendered report states the scan timestamp on its face, not the render timestamp, so a stale cache is visibly stale",
+        "The cache file is gitignored alongside the HTML and CSVs"
+      ],
+      "deps": [
+        "t3",
+        "t6"
+      ],
+      "covers": [
+        "c40",
+        "h36"
+      ],
+      "instruction": "Files: jlab/links/cache.py (new), tests/test_links_cache.py (new). The cache payload is exactly what --json emits \u2014 ids, no names. Store the scan timestamp in it and render that, not the render time. The cache lives under t3's contained path."
+    },
+    {
+      "id": "t10",
+      "summary": "Wire the links verb into the discord noun group",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "One invocation with no flags and no setup beyond DISCORD_BOT_TOKEN produces both artifacts \u2014 HTML and CSV \u2014 with no second command and no manual assembly",
+        "Every link row carries all six fields: url, channel, timestamp, thread, author and jump link",
+        "--json is id-only under every flag combination: resolve_authors and the report writer raise if reached from the --json path, and no file is written",
+        "The render path resolves display names in one batch via an unchanged jlab/members/resolve.py; that file is byte-identical before and after the ship and is imported, not copied",
+        "A link whose author has left the guild still appears in HTML and CSV with its author id present and no display name \u2014 tested with a fetch_member that raises NotFound; the members row filter on included_author_ids is NOT applied here",
+        "The report's coverage figures are read off scan_window's own per-channel statuses rather than recomputed",
+        "The spec's success signal carries a timed number or states that none exists yet; no invented figure ships as if measured"
+      ],
+      "deps": [
+        "t7",
+        "t8",
+        "t9"
+      ],
+      "covers": [
+        "c1",
+        "h1",
+        "c3",
+        "h20",
+        "c23",
+        "h6",
+        "c27",
+        "h15",
+        "c30",
+        "h10",
+        "h34",
+        "c32",
+        "h18",
+        "c37",
+        "h32"
+      ],
+      "instruction": "Files: jlab/cli/_commands/discord.py, tests/test_links_cli.py (new). The bottleneck task \u2014 fifteen coverage targets, one file, nothing else in its wave. Copy cmd_discord_members' stage order but NOT its included_author_ids row filter. Return immediately after emitting the payload in --json mode, before resolve_authors is reachable."
+    },
+    {
+      "id": "t11",
+      "summary": "Explain catalog entry for the links verb",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "uv run jlab explain discord links resolves",
+        "The _DISCORD group markdown lists the links verb alongside the others",
+        "Both tests/test_cli.py::test_every_catalog_path_resolves and uv run teken cli doctor . --strict pass"
+      ],
+      "deps": [
+        "t9",
+        "t10"
+      ],
+      "covers": [
+        "c4",
+        "h21"
+      ],
+      "instruction": "Files: jlab/explain/catalog.py. Add a _DISCORD_LINKS constant mirroring _DISCORD_MEMBERS, register ('discord','links'), and update the _DISCORD group's verb list. Run teken cli doctor . --strict to confirm."
+    },
+    {
+      "id": "t12",
+      "summary": "Extend the read-only and public-only invariant guards to the links modules",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "The write-call regex guard covers every new links module \u2014 proven by adding a deliberate .send( to one of them and watching the test fail",
+        "A private channel present in the guild is never passed to history() during a links run, proven with a fake whose history() raises, and its name and URLs appear nowhere in the output"
+      ],
+      "deps": [
+        "t9",
+        "t10"
+      ],
+      "covers": [
+        "c6",
+        "h23",
+        "c7",
+        "h24"
+      ],
+      "instruction": "Files: tests/test_members_invariants.py. Add every new links module to _GUARDED_FILES and add a private-channel test for the links path shaped like test_private_channel_contributes_nothing_to_member_statistics."
+    },
+    {
+      "id": "t13",
+      "summary": "Document the links verb and the content-retention inversion",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "The exported spec, README.md and CLAUDE.md each state in plain words that the links report retains URL content and that this deliberately inverts the members path's no-content rule",
+        "A Jetson AI Lab maintainer who has not read the spec can run the verb from the README alone and understand what the report shows",
+        "README states the motivation, so the report's purpose is legible without the spec",
+        "The existing discord read and discord active verbs are documented as unchanged; links is additive"
+      ],
+      "deps": [
+        "t9",
+        "t10"
+      ],
+      "covers": [
+        "c8",
+        "h25",
+        "c26",
+        "h14",
+        "c28",
+        "h16",
+        "c29",
+        "h17"
+      ],
+      "instruction": "Files: README.md, CLAUDE.md. Mirror the structure of the existing members sections. The content-retention inversion must be stated in prose a maintainer meets as a decision, not discovers as a contradiction. Run markdownlint-cli2 with the repo's globs."
+    },
+    {
+      "id": "t14",
+      "summary": "Version bump and changelog entry",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "pyproject.toml's version differs from origin/main so the version-check CI job passes",
+        "CHANGELOG.md carries a dated Keep-a-Changelog entry describing the links verb and the shared CSV capability"
+      ],
+      "deps": [
+        "t10",
+        "t11",
+        "t12",
+        "t13"
+      ],
+      "covers": [],
+      "instruction": "Files: pyproject.toml, CHANGELOG.md. Use the version-bump skill \u2014 it updates both. Minor bump: this adds a verb and a shared capability. Last task before the PR."
+    }
+  ],
+  "risks": [
+    {
+      "id": "r1",
+      "text": "Rate-budget contention on the shared DISCORD_BOT_TOKEN. A full-window links sweep costs roughly what a members sweep costs, and the token is shared with discord-bot-cli and other mesh agents. t9's cache reduces repeat cost but nothing bounds the first sweep or coordinates with other agents.",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r2",
+      "text": "t10 is a single-file bottleneck: fifteen coverage targets land in jlab/cli/_commands/discord.py. It cannot be split by file and gates t11, t12 and t13, so the graph narrows to one task at that point regardless of how many agents are available.",
+      "kind": "unknown_nonblocking",
+      "task_id": "t10",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r3",
+      "text": "t2 edits the shared seam every other verb reads. Its acceptance criteria say breakage in the channels/read/active/members suites is expected work, which makes 'tests pass' a weaker merge gate for this task than for the others \u2014 a reviewer must check that each changed assertion was changed deliberately.",
+      "kind": "unknown_nonblocking",
+      "task_id": "t2",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r4",
+      "text": "Link liveness is unexamined: nothing verifies a shared URL still resolves, and t1 may find attachment URLs expire within a day. If it does, a large fraction of the report's rows are dead on arrival and the feature's value drops materially \u2014 but discovering that is t1's job, before the extractor is built.",
+      "kind": "unknown_nonblocking",
+      "task_id": "t1",
+      "resolved": false,
+      "resolution": ""
+    }
+  ],
+  "obligations": []
+}
