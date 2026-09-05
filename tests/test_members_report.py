@@ -426,8 +426,9 @@ def test_a_failed_run_leaves_no_partial_artifacts_and_spares_the_previous_run(
 
         monkeypatch.setattr(atomic_writeset, "_swap_into_place", _boom)
 
+        aggregate = _aggregate()
         with pytest.raises(RuntimeError):
-            write_report(_aggregate(), run_id=doomed_run_id)
+            write_report(aggregate, run_id=doomed_run_id)
 
         # Nothing of the failed run reached the report directory: neither its
         # own run directory nor a staging directory named after it. (Asserted
@@ -503,9 +504,10 @@ def test_every_written_filename_is_gitignored():
 
 def test_write_report_rejects_a_hostile_run_id():
     """Criterion 5: a run id cannot escape the report directory either."""
+    aggregate = _aggregate()
     for hostile in ("../escape", "sub/dir", "/etc", "..", ".", ""):
         with pytest.raises(CliError):
-            write_report(_aggregate(), run_id=hostile)
+            write_report(aggregate, run_id=hostile)
 
 
 # --- the CSV sibling ------------------------------------------------------
