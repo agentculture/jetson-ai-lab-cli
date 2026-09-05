@@ -227,3 +227,77 @@ def test_cache_file_is_valid_json_matching_payload_shape() -> None:
     assert set(on_disk.keys()) == {"scanned_at", "records"}
     assert on_disk["scanned_at"] == scanned_at.isoformat()
     assert on_disk["records"] == _RECORDS
+
+
+# ---------------------------------------------------------------------------
+# t16 / d3: coverage fields travel with the cache.
+# ---------------------------------------------------------------------------
+
+_SCAN_RESULT = {
+    "guild_id": "1326246312072581160",
+    "since_days": 90,
+    "cutoff": "2026-03-03T00:00:00+00:00",
+    "concurrency": 4,
+    "exclude_bots": True,
+    "scanned_text_channels": 7,
+    "channels_ok": 5,
+    "channels_partial": 1,
+    "channels_failed": 1,
+    "message_count": 42,
+    "complete": False,
+    "channels": [{"id": "ch1", "status": "ok", "reason": None, "messages": []}],
+}
+
+
+def test_write_cache_persists_coverage_fields() -> None:
+    run_id = _run_id("t16a")
+    links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        coverage=_SCAN_RESULT,
+    )
+    payload = links_cache.load_cache(run_id)
+
+    coverage = payload["coverage"]
+    assert coverage["cutoff"] == _SCAN_RESULT["cutoff"]
+    assert coverage["scanned_text_channels"] == 7
+    assert coverage["channels_ok"] == 5
+    assert coverage["channels_partial"] == 1
+    assert coverage["channels_failed"] == 1
+    assert coverage["complete"] is False
+
+
+def test_cached_coverage_is_trimmed_not_the_whole_scan_result() -> None:
+    """Only the coverage fields survive -- no channel list, no message data."""
+    run_id = _run_id("t16b")
+    links_cache.write_cache(
+        run_id,
+        _RECORDS,
+        scanned_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+        coverage=_SCAN_RESULT,
+    )
+    payload = links_cache.load_cache(run_id)
+
+    assert "channels" not in payload["coverage"]
+
+    path = links_report_path(run_id, links_cache.CACHE_FILENAME)
+    text = path.read_text(encoding="utf-8")
+    assert "messages" not in text
+
+
+def test_old_shape_cache_without_coverage_key_still_loads() -> None:
+    """Backward compatibility: a pre-t16 cache has no ``coverage`` key."""
+    run_id = _run_id("t16c")
+    dest_dir = links_report_path(run_id, links_cache.CACHE_FILENAME).parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    old_shape = {
+        "scanned_at": "2026-06-03T00:00:00+00:00",
+        "records": _RECORDS,
+    }
+    path = links_report_path(run_id, links_cache.CACHE_FILENAME)
+    path.write_text(json.dumps(old_shape), encoding="utf-8")
+
+    payload = links_cache.load_cache(run_id)
+    assert payload["records"] == _RECORDS
+    assert payload.get("coverage") is None

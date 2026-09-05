@@ -628,6 +628,74 @@ def test_links_from_cache_is_quiet_when_fresh(
     assert "expir" not in capsys.readouterr().err.lower()
 
 
+def test_links_from_cache_render_matches_original_coverage_columns(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """t16 / d3: a --from-cache render states the SAME coverage as the run
+    that wrote the cache -- no 'unknown' cells, no invented numbers.
+
+    Proof: run once for real (capturing the CSV's coverage columns), then
+    re-render from the cache with scan_window monkeypatched to explode, and
+    assert the coverage columns come out identical.
+    """
+    _patch_scan(monkeypatch, _canned_scan())
+    _patch_resolve(monkeypatch)
+
+    assert main(["discord", "links"]) == 0
+    first_out = capsys.readouterr()
+    html_path = Path(first_out.out.strip())
+    run_id = html_path.parent.name
+    original_rows = list(
+        csv.DictReader((html_path.parent / "links-report.csv").open(encoding="utf-8"))
+    )
+    original_coverage = [
+        {
+            k: r[k]
+            for k in (
+                "channels_attempted",
+                "channels_ok",
+                "channels_partial",
+                "channels_failed",
+                "coverage_complete",
+                "window_start",
+            )
+        }
+        for r in original_rows
+    ]
+    assert original_coverage  # sanity: rows exist
+    assert "unknown" not in json.dumps(original_coverage)
+
+    def _no_scanning(*_a, **_kw):
+        raise AssertionError("--from-cache must not open a Discord scan")
+
+    monkeypatch.setattr(_discord, "scan_window", _no_scanning)
+
+    assert main(["discord", "links", "--from-cache", run_id]) == 0
+    second_out = capsys.readouterr()
+    cached_html_path = Path(second_out.out.strip())
+    cached_rows = list(
+        csv.DictReader((cached_html_path.parent / "links-report.csv").open(encoding="utf-8"))
+    )
+    cached_coverage = [
+        {
+            k: r[k]
+            for k in (
+                "channels_attempted",
+                "channels_ok",
+                "channels_partial",
+                "channels_failed",
+                "coverage_complete",
+                "window_start",
+            )
+        }
+        for r in cached_rows
+    ]
+
+    assert cached_coverage == original_coverage
+    assert "unknown" not in json.dumps(cached_coverage)
+
+
 def test_links_from_cache_missing_run_is_a_clierror(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
