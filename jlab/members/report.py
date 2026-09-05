@@ -2,7 +2,16 @@
 
 Turns :func:`jlab.members.aggregate.aggregate`'s id-only statistics into a
 single self-contained HTML page a Channel Maintainer can open in Chrome
-straight off the local filesystem.
+straight off the local filesystem, plus a CSV sibling carrying the same
+table for anyone who would rather sort it in a spreadsheet.
+
+:func:`write_report` writes that pair as **one artifact set** into a
+directory of its own (``data/reports/members/<run-id>/``) via
+:func:`jlab.atomic_writeset.write_artifact_set`, so a run either lands
+completely or not at all — never a complete CSV beside a missing or stale
+HTML — and one run's write can never disturb another's. The CSV itself is
+produced entirely by :func:`jlab.csv_export.write_csv`; this module owns no
+CSV code of its own.
 
 Four properties are load-bearing and are covered by
 ``tests/test_members_report.py``:
@@ -44,16 +53,33 @@ the two stages compose without depending on each other.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
 
+from jlab.atomic_writeset import write_artifact_set
 from jlab.cli._errors import EXIT_USER_ERROR, CliError
-from jlab.members.paths import members_report_path
+from jlab.csv_export import write_csv
+from jlab.members.paths import members_report_path, members_run_dir, new_run_id
 
 __all__ = ["render_report", "write_report"]
+
+# The CSV carries exactly the columns the HTML table already shows — counts,
+# lengths and ids, one row per member, in the same order. Nothing derived
+# from message *content* is added here; content never leaves the aggregation
+# stage, and this file must not become the place it leaks out.
+_CSV_HEADER = (
+    "member",
+    "discord_id",
+    "messages",
+    "distinct_channels",
+    "messages_ending_in_a_question",
+    "characters_written",
+    "average_characters_per_message",
+)
 
 _UNKNOWN = "unknown"
 
@@ -381,6 +407,40 @@ def render_report(
     return "\n".join(parts)
 
 
+def _csv_rows(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    """The HTML table's rows, in the HTML table's order, as CSV cells."""
+    return [
+        (
+            row["label"],
+            row["author_id"],
+            row["messages"],
+            row["channels"],
+            row["questions"],
+            row["characters"],
+            f'{row["avg_characters"]:.1f}',
+        )
+        for row in rows
+    ]
+
+
+def _render_csv_text(rows: list[dict[str, Any]]) -> str:
+    """Produce the CSV **entirely** via :func:`jlab.csv_export.write_csv`.
+
+    This module deliberately owns no CSV code of its own: no ``csv`` import,
+    no manual joining, no hand-rolled escaping. Formula-injection escaping
+    and correct quoting are ``write_csv``'s job and must stay in exactly one
+    place. ``write_artifact_set`` wants file *content*, though, and
+    ``write_csv`` writes to a *path* — so the shared writer runs into a
+    throwaway temp file and the bytes it produced are read back and handed
+    to the atomic writer with the HTML. The temp file lives outside the
+    report directory and is discarded either way, so nothing partial can
+    ever appear where a reader would look for a report.
+    """
+    with tempfile.TemporaryDirectory(prefix="jlab-members-csv-") as staging:
+        csv_path = write_csv(Path(staging) / "members.csv", _CSV_HEADER, _csv_rows(rows))
+        return csv_path.read_text(encoding="utf-8")
+
+
 def write_report(
     aggregate: Mapping[str, Any],
     *,
@@ -388,12 +448,29 @@ def write_report(
     excluded_count: int | None = None,
     generated_at: str | None = None,
     filename: str | None = None,
+    run_id: str | None = None,
 ) -> Path:
-    """Render *aggregate* and write it to the repo-anchored report path.
+    """Render *aggregate* and write this run's whole artifact set atomically.
 
-    The path comes from :func:`jlab.members.paths.members_report_path`,
-    which refuses to write outside this checkout's gitignored output
-    directory. Returns the path written.
+    One run writes **two** artifacts — the HTML page and its CSV sibling —
+    into a directory of its own:
+    ``data/reports/members/<run-id>/members-report.{html,csv}``. Both go
+    through :func:`jlab.atomic_writeset.write_artifact_set`, which stages
+    every file in a temporary directory and only then swaps the finished set
+    into place. Killing the write partway therefore leaves either the
+    complete set or no new artifacts at all — never a complete CSV beside a
+    missing or stale HTML. Because the destination belongs to this run
+    alone, that swap is a single ``os.replace`` and no sibling run's
+    directory is ever touched, which also makes concurrent runs safe.
+
+    *run_id* defaults to a fresh :func:`jlab.members.paths.new_run_id`.
+    *filename* names the HTML artifact (the CSV takes the same stem); both
+    it and the run id are validated by
+    :func:`jlab.members.paths.members_report_path`, which refuses anything
+    that could escape this checkout's gitignored output directory.
+
+    Returns the path of the **HTML file inside the run directory** — the
+    thing a reader opens, and the path ``jlab discord members`` prints.
     """
     html = render_report(
         aggregate,
@@ -401,6 +478,15 @@ def write_report(
         excluded_count=excluded_count,
         generated_at=generated_at,
     )
-    path = members_report_path() if filename is None else members_report_path(filename)
-    path.write_text(html, encoding="utf-8")
-    return path
+    run = new_run_id() if run_id is None else run_id
+    html_path = members_report_path(run) if filename is None else members_report_path(run, filename)
+    csv_name = html_path.with_suffix(".csv").name
+
+    write_artifact_set(
+        members_run_dir(run),
+        {
+            html_path.name: html,
+            csv_name: _render_csv_text(_rows(aggregate, resolved)),
+        },
+    )
+    return html_path
