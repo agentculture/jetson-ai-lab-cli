@@ -2,7 +2,7 @@
   "plan_slug": "jlab-discord-links-report",
   "schema_version": 2,
   "created": "2026-09-05T06:08:17Z",
-  "updated": "2026-09-05T06:45:39Z",
+  "updated": "2026-09-05T07:03:35Z",
   "deviations": [
     {
       "id": "d1",
@@ -316,6 +316,44 @@
       "status": "approved",
       "superseded": false,
       "seq": 17
+    },
+    {
+      "id": "e15",
+      "obligation_ref": "o5",
+      "test_ref": "tests/test_csv_export.py::test_escaped_csv_opens_as_inert_text_in_a_real_spreadsheet",
+      "behavior_text": "opens a generated CSV in LibreOffice Calc headless and asserts no cell became a formula and every hostile value survives as escaped text; the paired control asserts the UNESCAPED form does execute, so the check cannot be vacuous",
+      "contract_text": "a field beginning with = + - @ TAB or CR opens as inert text, not a formula",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "SUPERSEDES e13. A real spreadsheet application opened the file. Control: A2 became <f>HYPERLINK(...)</f> and '+1234567890' was coerced to a number; escaped: both are shared strings.",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T10:03:17+03:00",
+        "commit": "f549f7a"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 18
+    },
+    {
+      "id": "e16",
+      "obligation_ref": "o14",
+      "test_ref": "tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv",
+      "behavior_text": "loads a generated CSV with a stock pandas.read_csv and asserts columns and the escaped inert value",
+      "contract_text": "the flat CSV loads with a stock pandas.read_csv with no preprocessing",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "SUPERSEDES e14. pandas 3.0.5 added to the dev group; the test now executes and passes. The suite has zero skips. Google Sheets itself remains unautomatable.",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-05T10:03:17+03:00",
+        "commit": "f549f7a"
+      },
+      "origin": "llm",
+      "status": "approved",
+      "superseded": false,
+      "seq": 19
     }
   ],
   "deltas": [

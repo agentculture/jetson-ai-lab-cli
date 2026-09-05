@@ -64,6 +64,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CSV fields beginning with `=`, `+`, `-`, `@`, tab or carriage return are
   prefix-escaped, so a hostile display name or URL opens as inert text rather
   than executing as a formula in Excel or Sheets.
+- The CSV formula-injection defence is verified by **opening** a generated
+  file in a real spreadsheet application (LibreOffice Calc, headless), not
+  only by asserting on the emitted bytes — with a control test proving the
+  reader executes the unescaped form, so the check cannot go vacuous.
 - Rendered URLs are scheme-filtered: only `http`/`https` become anchors.
   `javascript:`, `data:` and control-character smuggling render as inert text
   — escaping makes a hostile URL *display* safely, but only scheme filtering

@@ -78,7 +78,7 @@ Quoted verbatim from the `devague summary` skeleton:
 
 ## Evidence
 
-- tests: full suite `334 passed, 1 skipped` at `08afe53`
+- tests: full suite `337 passed, 0 skipped`
 - tests: `tests/test_links_cli.py::test_discord_links_json_is_id_only` — pass (5 flag combinations, raising fakes)
 - tests: `tests/test_links_cli.py::test_departed_author_keeps_their_link` — pass
 - tests: `tests/test_links_report.py::test_only_http_and_https_urls_become_anchors` — pass
@@ -86,7 +86,9 @@ Quoted verbatim from the `devague summary` skeleton:
 - tests: `tests/test_links_cli.py::test_links_from_cache_render_matches_original_coverage_columns` — pass
 - tests: `tests/test_members_invariants.py::test_private_channel_contributes_nothing_to_links_extraction` — pass
 - tests: `tests/test_members_invariants.py::test_no_discord_write_calls_anywhere_in_members_code_paths` — pass, **and verified to fail when sabotaged**
-- tests: `tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv` — **skipped, never executed**
+- tests: `tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv` — pass (pandas 3.0.5, dev group)
+- tests: `tests/test_csv_export.py::test_escaped_csv_opens_as_inert_text_in_a_real_spreadsheet` — pass (LibreOffice Calc headless)
+- tests: `tests/test_csv_export.py::test_control_unescaped_csv_really_does_execute` — pass (control: unescaped input **does** execute)
 - coverage: 95.99% (gate 60)
 - lint: `black --check`, `isort --check-only`, `flake8`, `bandit -r jlab` — all clean; bandit 0 medium, 0 high
 - lint: `markdownlint-cli2` — 0 errors
@@ -111,13 +113,14 @@ Quoted verbatim from the `devague summary` skeleton:
 | A CSV read alone states its window and coverage gaps | high | evidence `e10` · test `tests/test_links_report.py::test_a_reader_with_only_a_csv_can_see_the_window_and_the_gaps` |
 | The report issues no verdict | high | evidence `e11` · test `tests/test_links_report.py::test_no_verdict_language_anywhere_in_the_rendered_output` |
 | URLs come from four deduped sources | high | evidence `e12` · `tests/test_links_extract.py` (41 tests) |
-| CSV fields are escaped so they open as inert text, not formulas | **medium** | evidence `e13` at *fidelity* strength — asserted on emitted bytes and via `csv.reader`; `h29` asked for verification by **opening** a generated CSV in a spreadsheet, which was never done |
-| The flat CSV loads in pandas and Google Sheets with no preprocessing | **unverified** | evidence `e14` — the pandas test exists but is **skipped** (pandas is not a dev dependency); Google Sheets was never tried |
+| CSV fields are escaped so they open as inert text, not formulas | **high** | evidence `e15` (supersedes `e13`) · test `tests/test_csv_export.py::test_escaped_csv_opens_as_inert_text_in_a_real_spreadsheet` — LibreOffice Calc opened the file; the paired control proves the reader executes unescaped input |
+| The flat CSV loads in pandas with no preprocessing | **high** | evidence `e16` (supersedes `e14`) · test `tests/test_csv_export.py::test_write_csv_round_trips_through_pandas_read_csv` — pandas is now a dev dependency; the suite has zero skips |
+| The flat CSV loads in **Google Sheets** specifically | **unverified** | no automation exists for Sheets; the LibreOffice and pandas results are the closest available proxies |
 | A full 90-day run completes within an agreed time budget | **unverified** | lapse `l1` (approved) — the "under 5 minutes" figure was invented, never measured; `c30` now says so in its own text |
 
 ## Remaining Work / Follow-up
 
-- **`r9` / `e14` — verify spreadsheet loadability for real.** The stated purpose of these CSVs is Google Drive and Python, and that is the least-verified criterion in the delivery. Next step: add pandas to the dev dependency group so the skipped test runs, and open one generated CSV by hand once. Nothing can automate the Sheets half.
+- **`r9` — CLOSED.** pandas was added to the dev group (runtime stays `dependencies = []`) so the skipped test executes, and two new tests drive LibreOffice Calc headless to open a generated CSV and inspect the saved workbook. A first attempt at the spreadsheet check was **vacuous** — it asserted "no formulas found", which the unescaped control also satisfied, because LibreOffice does not evaluate formulas on CSV import by default. The control is what caught it and is now a permanent test that fails loudly if the reader ever stops evaluating. **Google Sheets specifically remains unverified** — nothing automates it.
 - **`l1` / `c30` — time a real full-window run** and replace the removed performance figure with a measured one. Until then the success signal honestly states no budget is set.
 - **`r5` — stale docstring premise.** `jlab/members/aggregate.py` asserts the serialized shape "carries only `{id, author, content, created_at}`", which `t2` made false. The `question_starts` heuristic name still stands; the docstring's reasoning does not.
 - **`r6` — the isolation guard is prose-sensitive.** It greps literal substrings across `jlab/`, so a docstring mentioning `author.bot` trips it. The guard's own comment says the honest fix is an explicit exemption, never rewording. Two agents have now paid this toll.
