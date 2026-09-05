@@ -1,6 +1,6 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, doctor, overview.
+Verbs: channels, read, active, members, links, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
@@ -9,14 +9,36 @@ Read-only only (no post/react/thread). Public channels only by default
 from __future__ import annotations
 
 import argparse
+import json as _json
 
 from jlab.cli import _discord
+from jlab.cli._errors import EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
+from jlab.links import cache as _links_cache_mod
+from jlab.links import extract as _links_extract_mod
+from jlab.links import paths as _links_paths_mod
+from jlab.links import report as _links_report_mod
 from jlab.members import aggregate as _aggregate_mod
 from jlab.members import report as _report_mod
 from jlab.members import resolve as _resolve_mod
 
 _JSON_HELP = "Emit structured JSON."
+
+# The links pipeline writes TWO artifact sets per run, and
+# ``jlab.atomic_writeset.write_artifact_set`` replaces its whole destination
+# directory with exactly the files it is handed — so the report set and the
+# extraction cache cannot share one run directory without the second write
+# deleting the first. The cache therefore lives in a sibling run directory
+# named after the report's run id plus this suffix. ``--from-cache`` accepts
+# either spelling.
+_CACHE_RUN_SUFFIX = "-cache"
+
+
+def _cache_run_id(run_id: str) -> str:
+    """Return the run-directory name holding *run_id*'s extraction cache."""
+    if run_id.endswith(_CACHE_RUN_SUFFIX):
+        return run_id
+    return f"{run_id}{_CACHE_RUN_SUFFIX}"
 
 
 def _no_verb(args: argparse.Namespace) -> int:
@@ -183,6 +205,146 @@ def cmd_discord_members(args: argparse.Namespace) -> int | None:
     return None
 
 
+# -- links ------------------------------------------------------------------
+
+
+def _load_links_cache(run_id: str) -> dict:
+    """Load a cached extraction payload, or fail with a clean ``CliError``."""
+    try:
+        return _links_cache_mod.load_cache(_cache_run_id(run_id))
+    except FileNotFoundError:
+        raise CliError(
+            EXIT_USER_ERROR,
+            f"no cached links run {run_id!r} was found",
+            "list data/reports/links/ for the run ids that have a "
+            f"'{_CACHE_RUN_SUFFIX}' directory, or re-run without --from-cache",
+        )
+    except (OSError, ValueError, _json.JSONDecodeError) as exc:
+        raise CliError(
+            EXIT_USER_ERROR,
+            f"cached links run {run_id!r} could not be read: {exc}",
+            "the cache file is unreadable or corrupt; re-run without " "--from-cache to rebuild it",
+        )
+
+
+def cmd_discord_links(args: argparse.Namespace) -> int | None:
+    """Scan, extract shared addresses, and render one run's whole artifact set.
+
+    One invocation is the whole pipeline: scan window -> extract links ->
+    cache the extraction -> resolve author names in a single batch -> write
+    the HTML report and both CSVs into one per-run directory, printing only
+    that HTML path. Progress goes to stderr.
+
+    ``--json`` emits the **extraction** stage only — id-only records, no
+    name resolution, no files written — and returns before
+    ``resolve_authors``, ``write_cache`` or the report writer is reachable.
+    That containment is unconditional: no flag combination turns it off,
+    because stdout redirection is not containable the way the gitignored
+    report directory is. Do not "helpfully" attach a resolved mapping here.
+
+    Unlike :func:`cmd_discord_members`, the render path applies **no**
+    ``included_author_ids`` row filter. There, dropping a departed author
+    drops a person from a people-report; here it would delete a real link
+    share from the record of what was posted. A departed author keeps their
+    row, with their id and no display name.
+
+    ``--from-cache <run-id>`` re-renders a previous run's extraction without
+    opening a Discord scan at all. The cache carries the extraction payload
+    and the instant the scan ran, nothing else — a cached render therefore
+    shows that scan timestamp rather than now, and states no coverage
+    figures, because the scan's per-channel statuses are not part of the
+    cached payload. When the cache is older than the attachment-URL expiry
+    window, that is said on stderr.
+    """
+    guild_id = _discord._guild_id()
+    since_days = int(getattr(args, "since", _discord.DEFAULT_WINDOW_DAYS))
+    concurrency = int(getattr(args, "concurrency", _discord.DEFAULT_CONCURRENCY))
+    include_bots = bool(getattr(args, "include_bots", False))
+    from_cache = getattr(args, "from_cache", None)
+    json_mode = bool(getattr(args, "json", False))
+
+    generated_at: str | None = None
+    run_id: str | None = None
+
+    if from_cache:
+        payload = _load_links_cache(from_cache)
+        records = list(payload.get("records") or [])
+        generated_at = _links_cache_mod.cache_scanned_at(payload).isoformat(timespec="seconds")
+        emit_diagnostic(
+            f"rendering cached links run {from_cache} "
+            f"(scanned {generated_at}) — no Discord scan ..."
+        )
+        if _links_cache_mod.attachments_expired(payload):
+            emit_diagnostic(
+                "this cache is older than the "
+                f"{_links_cache_mod.ATTACHMENT_URL_EXPIRY_HOURS}-hour Discord "
+                "attachment-URL expiry window: addresses badged 'expiring' in "
+                "it have almost certainly stopped resolving"
+            )
+        # The cached payload carries records only; the scan's own coverage
+        # figures are not in it, so nothing is invented in their place.
+        scan_result: dict = {
+            "guild_id": str(guild_id),
+            "exclude_bots": not include_bots,
+        }
+    else:
+        emit_diagnostic(
+            f"scanning public text channels for the last {since_days} days "
+            f"(concurrency {concurrency}) ..."
+        )
+        scan_result = _discord.scan_window(
+            guild_id,
+            since_days=since_days,
+            concurrency=concurrency,
+            exclude_bots=not include_bots,
+        )
+        records = _links_extract_mod.extract_links(scan_result, include_bots=include_bots)
+        run_id = _links_paths_mod.new_run_id()
+
+    if json_mode:
+        # id-only: stop here, never touch resolve_authors, the cache or the
+        # report writer.
+        emit_result(
+            {
+                "guild_id": str(guild_id),
+                "since_days": since_days,
+                "include_bots": include_bots,
+                "records": records,
+            },
+            json_mode=True,
+        )
+        return None
+
+    if run_id is not None:
+        _links_cache_mod.write_cache(_cache_run_id(run_id), records)
+        emit_diagnostic(
+            f"cached this run's extraction as {run_id} "
+            f"(re-render it with --from-cache {run_id})"
+        )
+
+    author_ids = sorted({r["author_id"] for r in records if r.get("author_id")})
+    emit_diagnostic(f"resolving {len(author_ids)} author id(s) to names ...")
+    # include_departed=True: this stage only supplies names. Every link row
+    # is kept regardless of current membership (see the docstring).
+    resolve_result = _resolve_mod.resolve_authors(
+        guild_id,
+        {aid: {} for aid in author_ids},
+        include_departed=True,
+        concurrency=concurrency,
+    )
+    resolved = {aid: r.to_dict() for aid, r in resolve_result.resolved.items()}
+
+    path = _links_report_mod.write_report(
+        scan_result,
+        records,
+        resolved=resolved,
+        generated_at=generated_at,
+        run_id=run_id,
+    )
+    emit_result(str(path), json_mode=False)
+    return None
+
+
 # -- doctor -----------------------------------------------------------------
 
 
@@ -212,7 +374,10 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "active [--since D] [--limit N] [--top K] [--preview P] "
                 "[--concurrency C] — rank active channels",
                 "members [--since D] [--concurrency C] [--include-departed] "
-                "[--json] — scan + write an id-only members HTML report",
+                "[--json] — scan + write an id-only members HTML report and CSV",
+                "links [--since D] [--concurrency C] [--include-bots] "
+                "[--from-cache RUN] [--json] — scan + write a shared-address "
+                "HTML report and CSVs",
                 "doctor — verify token + guild readable",
                 "overview — describe this noun group",
             ],
@@ -238,7 +403,7 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "discord",
-        help="Read-only Discord scan (channels, read, active, doctor).",
+        help="Read-only Discord scan (channels, read, active, members, links, doctor).",
     )
     p.add_argument("--json", action="store_true", help=_JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
@@ -316,7 +481,10 @@ def register(sub: argparse._SubParsersAction) -> None:
     # members
     mm = noun_sub.add_parser(
         "members",
-        help="Scan participation and write an id-only members HTML report.",
+        help=(
+            "Scan participation and write an id-only members HTML report plus "
+            "a CSV into a per-run subdirectory."
+        ),
     )
     mm.add_argument(
         "--since",
@@ -350,6 +518,58 @@ def register(sub: argparse._SubParsersAction) -> None:
         ),
     )
     mm.set_defaults(func=cmd_discord_members, json=False, include_departed=False)
+
+    # links
+    lk = noun_sub.add_parser(
+        "links",
+        help=(
+            "Scan public text channels for shared addresses and write one run's "
+            "HTML report plus its flat and per-address CSVs."
+        ),
+    )
+    lk.add_argument(
+        "--since",
+        type=int,
+        default=_discord.DEFAULT_WINDOW_DAYS,
+        help=f"Days to look back (default {_discord.DEFAULT_WINDOW_DAYS}).",
+    )
+    lk.add_argument(
+        "--concurrency",
+        type=int,
+        default=_discord.DEFAULT_CONCURRENCY,
+        help=(
+            "Channels read concurrently "
+            f"(default {_discord.DEFAULT_CONCURRENCY}; keeps Discord rate limits happy)."
+        ),
+    )
+    lk.add_argument(
+        "--include-bots",
+        action="store_true",
+        help="Include bot- and webhook-authored shares (default excludes them).",
+    )
+    lk.add_argument(
+        "--from-cache",
+        metavar="RUN_ID",
+        default=None,
+        help=(
+            "Re-render a previous run's cached extraction instead of scanning "
+            "Discord again; pass the run id from that run's report directory."
+        ),
+    )
+    lk.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            f"{_JSON_HELP} Emits the id-only extraction (no name resolution, "
+            "no report and no cache written)."
+        ),
+    )
+    lk.set_defaults(
+        func=cmd_discord_links,
+        json=False,
+        include_bots=False,
+        from_cache=None,
+    )
 
     # doctor
     dr = noun_sub.add_parser(
