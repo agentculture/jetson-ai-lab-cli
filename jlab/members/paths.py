@@ -52,6 +52,64 @@ def find_repo_root() -> Path | None:
     return None
 
 
+def _reject_symlink_escape(path: Path, root: Path) -> None:
+    """Refuse *path* if a symlink lets it resolve outside *root*.
+
+    Two checks, applied in order:
+
+    1. Walk every path component between *root* and *path* that already
+       exists on disk, and reject any one of them that is itself a
+       symlink (e.g. ``data/reports/members`` — or ``data`` or
+       ``data/reports`` above it — already being a symlink pointing
+       somewhere else).
+    2. If *path* itself exists, resolve it fully and reject unless the
+       resolved path is *root* or lives beneath it.
+
+    **What this guarantees:** a symlink anywhere between *root* and
+    *path* that already exists at the moment this function runs is
+    caught before a caller creates or writes through *path*.
+
+    **What this does NOT guarantee:** this is a point-in-time check, not
+    a lock. It cannot close a TOCTOU race — nothing stops a symlink from
+    being swapped into place after this call returns and before a
+    subsequent filesystem operation follows the same path. Closing that
+    race would need an atomic, symlink-refusing open at each path
+    component (e.g. ``O_NOFOLLOW``), which a pure ``pathlib``/``os`` path
+    check cannot provide.
+    """
+    root = root.resolve()
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        rel_parts = path.parts
+    current = root
+    for part in rel_parts:
+        current = current / part
+        if current.exists() and current.is_symlink():
+            raise CliError(
+                EXIT_ENV_ERROR,
+                f"refusing to write: {current} is a symlink, not a real directory",
+                "remove or relocate the symlink at that path — report "
+                "output must live in a real, contained directory under "
+                "the repo root, never behind a symlink that could "
+                "redirect it elsewhere",
+            )
+    if path.exists():
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            raise CliError(
+                EXIT_ENV_ERROR,
+                f"refusing to write: {path} resolves to {resolved}, "
+                f"outside the repo root {root}",
+                "remove the symlink (or misplaced directory) so this "
+                "path resolves inside the repository; report output "
+                "must never land outside the gitignored repo-relative "
+                "directory",
+            )
+
+
 def members_reports_dir() -> Path:
     """Return the gitignored PARENT directory that holds one dir per run.
 
@@ -60,8 +118,15 @@ def members_reports_dir() -> Path:
     :func:`members_run_dir` for why that layout is load-bearing rather than
     cosmetic. Creates the directory (and its parents) if it does not exist
     yet.
+
+    Before creating anything, and again after, the resolved destination is
+    checked against the resolved repo root via :func:`_reject_symlink_escape`
+    — see that function's docstring for exactly what containment guarantee
+    this provides (a one-shot check, not a race-free lock).
+
     Raises :class:`CliError` with :data:`~jlab.cli._errors.EXIT_ENV_ERROR`
-    instead of writing anywhere else when no repo root can be resolved —
+    instead of writing anywhere else when no repo root can be resolved, or
+    when a symlink would place the output outside the repo root —
     person-level data must never be written outside this repo's ignored
     path, so refusing to write is the only acceptable fallback.
     """
@@ -76,7 +141,9 @@ def members_reports_dir() -> Path:
             "path rather than falling back to the current directory",
         )
     out_dir = root.joinpath(*_REPORTS_SUBDIR)
+    _reject_symlink_escape(out_dir, root)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_escape(out_dir, root)
     return out_dir
 
 
@@ -130,10 +197,23 @@ def members_run_dir(run_id: str) -> Path:
     filenames are: a run id carrying a separator or ``..`` would place the
     run's artifacts outside the gitignored report directory. Hostile run ids
     are refused, never normalised.
+
+    Additionally, if a directory or symlink already sits at this run's path,
+    :func:`_reject_symlink_escape` checks it is not a symlink escaping the
+    repo root — see that function's docstring for the exact (point-in-time,
+    non-race-free) guarantee this provides.
     """
     reports_dir = members_reports_dir()
     _require_bare_segment(run_id, "run id", "20260905T101112Z-1a2b3c4d")
-    return reports_dir / run_id
+    run_dir = reports_dir / run_id
+    root = find_repo_root()
+    if root is not None:
+        # members_reports_dir() above already raised if this were None; the
+        # check is repeated here only because find_repo_root() is called
+        # fresh rather than threaded through, and mypy/readers should not
+        # have to trust that invariant silently.
+        _reject_symlink_escape(run_dir, root)
+    return run_dir
 
 
 def members_report_path(run_id: str, filename: str = _DEFAULT_REPORT_FILENAME) -> Path:

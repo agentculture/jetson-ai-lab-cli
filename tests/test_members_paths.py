@@ -156,6 +156,76 @@ def test_new_run_id_is_unique_and_a_safe_bare_segment() -> None:
         assert members_paths.members_run_dir(run_id).parent == members_paths.members_reports_dir()
 
 
+# --- symlink containment (finding 7) --------------------------------------
+
+
+def test_reports_dir_rejects_a_symlinked_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-existing symlink above the reports dir must not be followed.
+
+    Simulates ``data/reports`` (an ancestor of the fixed repo-relative path)
+    already being a symlink pointing outside the intended repo root. This
+    must be refused rather than silently followed, or person-level Discord
+    data would land outside the gitignored boundary.
+    """
+    fake_root = tmp_path / "fake-repo"
+    fake_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (fake_root / "data").mkdir()
+    (fake_root / "data" / "reports").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(members_paths, "find_repo_root", lambda: fake_root)
+
+    with pytest.raises(CliError) as exc:
+        members_paths.members_reports_dir()
+    assert exc.value.code == EXIT_ENV_ERROR
+    assert exc.value.remediation
+    # Nothing must have been created inside the outside directory.
+    assert not (outside / "members").exists()
+
+
+def test_reports_dir_rejects_being_itself_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The final component (``links``/``members``) itself may be the symlink."""
+    fake_root = tmp_path / "fake-repo"
+    fake_root.mkdir()
+    outside = tmp_path / "outside-2"
+    outside.mkdir()
+    (fake_root / "data" / "reports").mkdir(parents=True)
+    (fake_root / "data" / "reports" / "members").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(members_paths, "find_repo_root", lambda: fake_root)
+
+    with pytest.raises(CliError) as exc:
+        members_paths.members_reports_dir()
+    assert exc.value.code == EXIT_ENV_ERROR
+    assert exc.value.remediation
+
+
+def test_run_dir_rejects_a_preexisting_symlinked_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run-id directory that is already a symlink out of the repo is refused."""
+    fake_root = tmp_path / "fake-repo"
+    fake_root.mkdir()
+    (fake_root / "culture.yaml").write_text("suffix: fake\n", encoding="utf-8")
+    outside = tmp_path / "outside-3"
+    outside.mkdir()
+    reports_dir = fake_root / "data" / "reports" / "members"
+    reports_dir.mkdir(parents=True)
+    (reports_dir / "hostile-run").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(members_paths, "find_repo_root", lambda: fake_root)
+
+    with pytest.raises(CliError) as exc:
+        members_paths.members_run_dir("hostile-run")
+    assert exc.value.code == EXIT_ENV_ERROR
+    assert exc.value.remediation
+
+
 def test_run_id_cannot_escape_the_contained_directory() -> None:
     """The traversal guard applies to RUN IDS too, not only to filenames."""
     reports_dir = members_paths.members_reports_dir().resolve()
