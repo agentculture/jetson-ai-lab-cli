@@ -33,11 +33,17 @@ a parallel task, and turns a missing/incompatible install into a clean
 from __future__ import annotations
 
 import os
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from jlab.cli._errors import EXIT_ENV_ERROR, CliError
 
 _MONGO_URI_ENV = "JLAB_MONGO_URI"
+
+# Database used when the URI names no default database, and the collection the
+# encrypted message cache lives in (see :mod:`jlab.cache`).
+_DEFAULT_DB_NAME = "jlab"
+MESSAGES_COLLECTION = "messages"
 
 # The two mongod containers this machine already runs, neither of which is
 # jlab's: qq-mongodb (legacy) on 27017, eidetic-mongo (memory store) on
@@ -146,6 +152,28 @@ def _seam() -> Any:
             remediation="install jlab's runtime dependencies: uv sync",
         )
     return pymongo
+
+
+@contextmanager
+def message_collection(uri: str | None = None) -> Iterator[Any]:
+    """Yield the cached-messages collection, closing the client afterwards.
+
+    The single way for other modules to reach jlab-mongodb: the URI still comes
+    from :func:`_mongo_uri` (env only) and still passes
+    :func:`_reject_legacy_ports`, so no caller can route around the
+    dedicated-instance guard by opening its own client.
+    """
+    pymongo = _seam()
+    resolved_uri = _mongo_uri() if uri is None else uri
+    _reject_legacy_ports(resolved_uri)
+    client = pymongo.MongoClient(
+        resolved_uri, serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS
+    )
+    try:
+        database = client.get_default_database(default=_DEFAULT_DB_NAME)
+        yield database[MESSAGES_COLLECTION]
+    finally:
+        client.close()
 
 
 def check_cache(uri: str | None = None) -> dict[str, object]:

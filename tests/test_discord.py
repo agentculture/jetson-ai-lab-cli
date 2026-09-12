@@ -735,10 +735,16 @@ def test_doctor_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
     cache_status = {"reachable": True, "host": "localhost", "port": 27019}
     monkeypatch.setattr(_discord._mongo, "check_cache", lambda: cache_status)
+    # Encryption is *measured* (a store/fetch probe against the live
+    # collection), so doctor's happy path is stubbed here the same way the
+    # cache reachability check is — see tests/test_cache.py for the measurement.
+    encryption = {"encrypted": True, "measured": True, "algorithm": "x", "method": "probe"}
+    monkeypatch.setattr(_discord._cache, "measure_encryption", lambda: encryption)
     assert _discord.doctor(123) == {
         "ok": True,
         "guild_id": "123",
         "cache": cache_status,
+        "encryption": encryption,
     }
 
 
@@ -805,6 +811,55 @@ def test_discord_doctor_text_reports_cache_reachable(
     out = capsys.readouterr().out
     assert "jlab-mongodb" in out
     assert "27019" in out
+
+
+def test_discord_doctor_text_reports_encryption_as_measured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """o16: doctor says encryption was *measured*, and names the construction."""
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True, "host": "localhost", "port": 27019},
+            "encryption": {
+                "encrypted": True,
+                "measured": True,
+                "method": "store/fetch probe",
+                "algorithm": "HMAC-SHA256 keystream",
+                "key_fingerprint": "deadbeef",
+            },
+        },
+    )
+    rc = main(["discord", "doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "encryption measured" in out
+    assert "HMAC-SHA256 keystream" in out
+    assert "deadbeef" in out
+
+
+def test_discord_doctor_json_carries_the_encryption_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True},
+            "encryption": {"encrypted": True, "measured": True},
+        },
+    )
+    rc = main(["discord", "doctor", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["encryption"] == {"encrypted": True, "measured": True}
 
 
 # ---------------------------------------------------------------------------

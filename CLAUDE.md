@@ -138,6 +138,49 @@ ranking, no recommended reading.
 `discord read` and `discord active` are unchanged by this addition — `links`
 is a new, additive verb in the `discord` noun group.
 
+### The message cache: full message bodies are retained, by decision
+
+The paged-read/regex-search path (`jlab/cache.py`, backed by the jlab-mongodb
+instance `jlab/mongo.py` guards) is the **third** and most retentive of jlab's
+three content positions, and it is stated here rather than left for a reader to
+infer from behaviour:
+
+1. **`members` — no content.** Message text never survives aggregation; only
+   counts and lengths do.
+2. **`links` — URL-only.** The URL is retained because a links report cannot
+   exist without it; the surrounding message text never is.
+3. **the message cache — full message bodies are retained.** The whole message
+   is stored, because a read past the 100-message ceiling and a regex search
+   over history are exactly "the text of what was said" and cannot be served
+   from counts or URLs. This is a deliberate decision the user approved, not a
+   drift from rule 1: the members no-content rule is **not** inherited here.
+
+Because it retains the most, this path carries obligations the other two do
+not, and they are load-bearing:
+
+- **Encrypted at the application layer.** Content is encrypted by
+  `jlab/crypto.py` *before* pymongo sees it and decrypted after it comes back,
+  so encryption at rest does not depend on the MongoDB edition's storage
+  engine — community edition has none. The key comes from **`JLAB_CACHE_KEY`**
+  (env only, read in `jlab/crypto.py` and nowhere else, mirroring
+  `JLAB_MONGO_URI`); a missing, blank or short key is a `CliError(code=2)`,
+  never a silent fall back to storing plaintext.
+- **Measured, not assumed.** `jlab discord doctor` calls
+  `jlab.cache.measure_encryption()`, which stores a marked probe through the
+  real write path, reads the raw stored document back *without* decrypting,
+  and fails if the marker is found. Doctor reports what it measured.
+- **Three timestamps per message.** `created_at` (Discord's), `updated_at`
+  (Discord's edit timestamp, `None` when unedited) and `stored_at` (when jlab
+  wrote the copy) — so edits are detectable and the age of the local copy is
+  always known. Metadata (channel id, author id, timestamps, jump URL) is
+  stored in the clear on purpose so the cache stays queryable; only the body
+  is encrypted.
+- **Honest limitation:** the construction is a stdlib composition
+  (HKDF-SHA256, an HMAC-SHA256 counter-mode keystream, encrypt-then-MAC), not
+  a standardised, independently reviewed AEAD, and there is no key rotation.
+  `jlab/crypto.py`'s module docstring states the limits in full; don't
+  overstate them elsewhere.
+
 ## Running the CLI — the command-name trap
 
 The installed console script is **`jlab`**, not `jetson-ai-lab-cli`:

@@ -269,3 +269,70 @@ def test_seam_missing_pymongo_raises_env_error(monkeypatch: pytest.MonkeyPatch) 
     assert exc.value.code == 2
     assert "pymongo" in exc.value.message
     assert exc.value.remediation
+
+
+# ---------------------------------------------------------------------------
+# message_collection() — the one handle other modules may use (jlab.cache)
+# ---------------------------------------------------------------------------
+
+
+class _FakeDatabase:
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def __getitem__(self, name: str) -> str:
+        self.asked.append(name)
+        return f"collection:{name}"
+
+
+class _FakeClientWithDb(_FakeClient):
+    def __init__(self, *a, **kw) -> None:
+        super().__init__(*a, **kw)
+        self.db = _FakeDatabase()
+        self.default_db_arg: object = None
+
+    def get_default_database(self, default=None):
+        self.default_db_arg = default
+        return self.db
+
+
+class _FakePyMongoModuleWithDb(_FakePyMongoModule):
+    def MongoClient(self, uri, **kw):
+        client = _FakeClientWithDb(uri, address=self._address)
+        self.last_client = client
+        return client
+
+
+def test_message_collection_yields_the_messages_collection_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.message_collection() as col:
+        assert col == f"collection:{_mongo.MESSAGES_COLLECTION}"
+        assert fake.last_client.closed is False
+    assert fake.last_client.closed is True
+
+
+def test_message_collection_requires_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No baked-in default host: the cache handle goes through the same guard."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.message_collection():
+            pass
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("port", [27017, 27018])
+def test_message_collection_rejects_legacy_ports(
+    monkeypatch: pytest.MonkeyPatch, port: int
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, f"mongodb://localhost:{port}/jlab")
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.message_collection():
+            pass
+    assert exc.value.code == 2

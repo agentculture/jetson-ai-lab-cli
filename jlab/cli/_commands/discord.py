@@ -478,10 +478,18 @@ def cmd_discord_doctor(args: argparse.Namespace) -> int:
         emit_result(result, json_mode=True)
     else:
         cache = result.get("cache") or {}
+        encryption = result.get("encryption") or {}
         lines = [f"ok: guild {result['guild_id']}"]
         if cache.get("reachable"):
             lines.append(
                 f"ok: jlab-mongodb cache reachable at {cache.get('host')}:{cache.get('port')}"
+            )
+        if encryption.get("measured"):
+            # Measured, never assumed: a probe was stored, read back raw and
+            # found to contain no plaintext (see jlab.cache.measure_encryption).
+            lines.append(
+                "ok: cache content encryption measured by store/fetch probe "
+                f"({encryption.get('algorithm')}); key {encryption.get('key_fingerprint')}"
             )
         emit_result("\n".join(lines), json_mode=False)
     return 0
@@ -506,7 +514,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "links [--since D] [--concurrency C] [--include-bots] "
                 "[--from-cache RUN] [--json] — scan + write a shared-address "
                 "HTML report and CSVs",
-                "doctor — verify token + guild readable",
+                "doctor — verify token + guild readable, jlab-mongodb cache "
+                "reachable, and cache content encryption measured",
                 "overview — describe this noun group",
             ],
         },

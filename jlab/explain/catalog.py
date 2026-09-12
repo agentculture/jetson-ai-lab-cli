@@ -202,6 +202,13 @@ qq-mongodb on 27017 or the eidetic-mongo memory store on 27018). Exits 2 on
 any environment error, including an absent or unreachable cache — never a
 silent empty result.
 
+It also **measures** the cache's application-level content encryption rather
+than assuming it: a marked probe document is written through the real store
+path, read straight back out of the collection *without* decrypting, and
+checked for the marker. A plaintext hit, or an absent ``JLAB_CACHE_KEY``,
+exits 2. The reported line describes what was measured, not what was
+configured.
+
 ## Usage
 
     jetson-ai-lab-cli discord doctor

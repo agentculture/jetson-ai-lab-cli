@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-12
+
+### Added
+
+- Encrypted jlab-mongodb message cache (`jlab/cache.py`): message documents carrying `created_at` (Discord's), `updated_at` (Discord's edit timestamp, `null` when unedited) and `stored_at` (when jlab wrote the copy), upserted through `jlab.mongo.message_collection()`.
+- Application-level content encryption (`jlab/crypto.py`): HKDF-SHA256 sub-keys, an HMAC-SHA256 counter-mode keystream and encrypt-then-MAC authentication, keyed only from `JLAB_CACHE_KEY`. Standard library only — no new dependency. A missing, blank or under-32-character key raises `CliError(code=2)`; there is no plaintext fallback.
+- `jlab discord doctor` now **measures** cache encryption instead of assuming it: `jlab.cache.measure_encryption()` stores a marked probe through the real write path, reads the raw document back without decrypting, fails if the marker is found, and deletes the probe.
+- `edited_at` on serialized Discord messages, so an edit is detectable in the cache.
+
+### Changed
+
+- CLAUDE.md and README now state the retention position explicitly: this path retains **full message bodies by decision**, beside the `members` no-content rule and the `links` URL-only rule, together with the encryption obligation and the honest limits of the construction.
+
 ## [0.7.1] - 2026-09-12
 
 ### Added
