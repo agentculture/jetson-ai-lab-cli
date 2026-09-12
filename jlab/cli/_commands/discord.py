@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 
-from jlab import coverage as _coverage_mod
 from jlab import purge as _purge_mod
 from jlab.cli import _discord
 from jlab.cli._commands import coverage as _coverage_cmd

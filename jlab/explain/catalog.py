@@ -135,7 +135,8 @@ private opt-in).
 - `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
 - `jetson-ai-lab-cli discord members [--since DAYS] [--json]` — scan participation statistics.
 - `jetson-ai-lab-cli discord links [--since DAYS] [--json]` — scan shared addresses.
-- `jetson-ai-lab-cli discord coverage [<channel_id>] [--since TS] [--until TS]` — inspect cache coverage metadata.
+- `jetson-ai-lab-cli discord coverage [CHANNEL_ID] [--since] [--until]`
+  — inspect cache coverage metadata.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
