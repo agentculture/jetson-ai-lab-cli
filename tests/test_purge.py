@@ -518,6 +518,7 @@ def test_explain_discord_purge_resolves(capsys: pytest.CaptureFixture[str]) -> N
 # Wave-3 integration: purge x coverage x suppression (t6 + t12 + deviation d3)
 # ===========================================================================
 
+import contextlib  # noqa: E402
 import fcntl  # noqa: E402
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
@@ -670,17 +671,36 @@ def test_purge_older_than_deletes_each_channel_under_its_own_lock(key: str) -> N
 # -- 3. purge cannot interleave with a fetch holding the lock ----------------
 
 
-def _hold_lock(channel: str):
+@contextlib.contextmanager
+def _fetch_holds_lock(channel: str, *, deadline: float = 3.0):
+    """Hold *channel*'s flock from another thread, on its own open file description.
+
+    The holder always lets go after *deadline* seconds, so a purge that wrongly
+    ignores the lock *finishes* (and the test's assertions fail) instead of
+    deadlocking the test run.
+    """
     path = _coverage.lock_path(channel)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)  # a different open file description: a "fetch"
-    return fd
+    held, release = threading.Event(), threading.Event()
 
+    def hold() -> None:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.set()
+            release.wait(deadline)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
-def _release(fd: int) -> None:
-    fcntl.flock(fd, fcntl.LOCK_UN)
-    os.close(fd)
+    thread = threading.Thread(target=hold, daemon=True)
+    thread.start()
+    assert held.wait(5)
+    try:
+        yield release
+    finally:
+        release.set()
+        thread.join(5)
 
 
 def test_non_blocking_purge_channel_refuses_while_a_fetch_holds_the_lock(key: str) -> None:
@@ -688,12 +708,9 @@ def test_non_blocking_purge_channel_refuses_while_a_fetch_holds_the_lock(key: st
     window = _iv(_at(2026, 8), _at(2026, 9))
     _cache.store_messages("777", [_message("1")], collection=col)
     _coverage.widen_coverage("777", window, collection=_cov(col))
-    fd = _hold_lock("777")
-    try:
+    with _fetch_holds_lock("777"):
         with pytest.raises(CliError) as excinfo:
             _purge.purge_channel("777", collection=col, report_dirs=[], blocking=False)
-    finally:
-        _release(fd)
     assert excinfo.value.code == EXIT_ENV_ERROR
     assert len(col.docs) == 1
     assert _coverage.describe("777", window, collection=_cov(col))["complete"] is True
@@ -702,7 +719,6 @@ def test_non_blocking_purge_channel_refuses_while_a_fetch_holds_the_lock(key: st
 def test_purge_channel_waits_for_a_fetch_holding_the_lock(key: str) -> None:
     col = _FakeCollection()
     _cache.store_messages("777", [_message("1")], collection=col)
-    fd = _hold_lock("777")
     outcome: dict = {}
 
     def run() -> None:
@@ -711,15 +727,14 @@ def test_purge_channel_waits_for_a_fetch_holding_the_lock(key: str) -> None:
         except BaseException as exc:  # surfaced below
             outcome["error"] = exc
 
-    thread = threading.Thread(target=run)
-    try:
+    with _fetch_holds_lock("777", deadline=10) as release:
+        thread = threading.Thread(target=run, daemon=True)
         thread.start()
         thread.join(0.5)
         assert thread.is_alive(), "purge ran while a fetch held the channel lock"
         assert len(col.docs) == 1
-    finally:
-        _release(fd)
-        thread.join(5)
+        release.set()
+    thread.join(5)
     assert "error" not in outcome, outcome.get("error")
     assert col.docs == {}
 
@@ -729,16 +744,15 @@ def test_non_blocking_purge_older_than_refuses_while_a_fetch_holds_a_channel(key
     _cache.store_messages(
         "777", [_message("1", created="2020-01-01T00:00:00+00:00")], collection=col
     )
-    fd = _hold_lock("777")
-    try:
+    _coverage.widen_coverage("777", _iv(_at(2019, 1), _at(2021, 1)), collection=_cov(col))
+    with _fetch_holds_lock("777"):
         with pytest.raises(CliError) as excinfo:
             _purge.purge_older_than(
                 5, collection=col, report_dirs=[], now=_at(2026, 9, 12), blocking=False
             )
-    finally:
-        _release(fd)
     assert excinfo.value.code == EXIT_ENV_ERROR
     assert len(col.docs) == 1
+    assert _coverage.read_coverage("777", collection=_cov(col)) == [_iv(_at(2019, 1), _at(2021, 1))]
 
 
 # -- 4. author purge records a keyed-hash suppression ------------------------
