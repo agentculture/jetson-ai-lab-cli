@@ -181,6 +181,37 @@ not, and they are load-bearing:
   `jlab/crypto.py`'s module docstring states the limits in full; don't
   overstate them elsewhere.
 
+### Purge: per-user / per-channel deletion and the retention bound (`jlab discord purge`)
+
+`jlab discord purge` is the runnable deletion path behind Discord's Developer
+Terms and the published privacy policy (delete on user request, on Discord
+request, and once retention is no longer needed — including derived indexes).
+Exactly one target: `--author ID`, `--channel ID`, or `--older-than DAYS`.
+Logic lives in `jlab/purge.py`; the Mongo side is `jlab/cache.py`'s
+`delete_by_author` / `delete_by_channel` / `delete_older_than` (one server-side
+`delete_many` on the cleartext `author_id` / `channel_id` / `created_at`, no
+decryption needed).
+
+**Derived reports are purged too, whole-run.** Every file of every run
+directory under `data/reports/{members,links}/` (including links `-cache`
+siblings) is scanned for the target id on digit boundaries; a run that
+mentions it is removed entirely, never row-edited — a run is one rendered,
+internally consistent artifact set and is regenerable, so over-removal costs a
+re-run while under-removal breaks the promise. Known limit: members reports
+carry per-channel counts but no channel ids, so a `--channel` purge cannot tell
+which members runs that channel fed; those runs hold no content from it.
+
+**Safety.** Targets must be bare numeric ids — empty, whitespace, `*`, `all`
+and patterns exit 1 before anything is touched. **Without `--yes` the verb is
+a dry run**; with it, it reports exactly what matched and what was removed.
+Re-running is idempotent.
+
+**Retention is bounded, not indefinite.** The cache keeps full bodies only
+because paged read and regex search need them; `purge --older-than DAYS --yes`
+drops cached messages and report runs older than the window the operator's
+stated functionality needs, and is meant to run from cron beside the daily
+reconciliation sweep. jlab builds no scheduler.
+
 ## Running the CLI — the command-name trap
 
 The installed console script is **`jlab`**, not `jetson-ai-lab-cli`:
