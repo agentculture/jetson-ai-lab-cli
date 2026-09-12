@@ -282,3 +282,82 @@ def _measure(collection: Any) -> dict[str, Any]:
         "envelope_version": _crypto.ENVELOPE_VERSION,
         "key_fingerprint": fingerprint,
     }
+
+
+# ---------------------------------------------------------------------------
+# Deletion (t12) — per author, per channel, and by age.
+#
+# ``author_id`` and ``channel_id`` are stored in the clear precisely so these
+# deletions can run as one server-side ``delete_many`` without decrypting the
+# corpus. Callers wanting operator-facing validation (snowflake-only targets,
+# a dry-run default) go through :mod:`jlab.purge`; the guard below is defence
+# in depth so that no caller of this layer can express "delete everything".
+# ---------------------------------------------------------------------------
+
+
+def _require_delete_value(value: Any, field: str) -> str:
+    """Refuse a missing, empty or non-scalar delete target.
+
+    A ``None``/empty value, or a dict (which pymongo would read as a query
+    operator such as ``{"$ne": ""}``), would widen a targeted delete into a
+    collection-wide one. Only a non-empty plain string/int is accepted.
+    """
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"refusing to delete by {field}: target must be a plain id, got {value!r}",
+            remediation="pass one explicit Discord id (see `jetson-ai-lab-cli discord purge`)",
+        )
+    text = str(value).strip()
+    if not text:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"refusing to delete by {field}: target is empty",
+            remediation="pass one explicit Discord id (see `jetson-ai-lab-cli discord purge`)",
+        )
+    return text
+
+
+def _delete_where(query: dict[str, Any], collection: Any, dry_run: bool) -> dict[str, Any]:
+    def _run(col: Any) -> dict[str, Any]:
+        matched = int(col.count_documents(query))
+        if dry_run:
+            return {"matched": matched, "deleted": 0}
+        result = col.delete_many(query)
+        return {"matched": matched, "deleted": int(result.deleted_count)}
+
+    if collection is None:
+        with _mongo.message_collection() as col:
+            return _run(col)
+    return _run(collection)
+
+
+def delete_by_author(
+    author_id: str | int, *, collection: Any = None, dry_run: bool = False
+) -> dict[str, Any]:
+    """Delete every cached message by *author_id*; return ``{matched, deleted}``."""
+    query = {"author_id": _require_delete_value(author_id, "author_id")}
+    return _delete_where(query, collection, dry_run)
+
+
+def delete_by_channel(
+    channel_id: str | int, *, collection: Any = None, dry_run: bool = False
+) -> dict[str, Any]:
+    """Delete every cached message from *channel_id*; return ``{matched, deleted}``."""
+    query = {"channel_id": _require_delete_value(channel_id, "channel_id")}
+    return _delete_where(query, collection, dry_run)
+
+
+def delete_older_than(
+    cutoff: dt.datetime, *, collection: Any = None, dry_run: bool = False
+) -> dict[str, Any]:
+    """Delete every cached message created before *cutoff* (the retention bound)."""
+    if not isinstance(cutoff, dt.datetime):
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"refusing to delete by age: cutoff must be a datetime, got {cutoff!r}",
+            remediation="pass --older-than DAYS to `jetson-ai-lab-cli discord purge`",
+        )
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=dt.timezone.utc)
+    return _delete_where({"created_at": {"$lt": cutoff}}, collection, dry_run)

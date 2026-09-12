@@ -1,6 +1,6 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, links, doctor, overview.
+Verbs: channels, read, active, members, links, purge, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 
+from jlab import purge as _purge_mod
 from jlab.cli import _discord
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
@@ -475,6 +476,55 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
     return None
 
 
+# -- purge -------------------------------------------------------------------
+
+
+def _purge_text(result: dict) -> str:
+    target = result["target"]
+    cache = result["cache"]
+    reports = result["reports"]
+    dry = result["dry_run"]
+    head = "dry run (nothing deleted; re-run with --yes to delete)" if dry else "purged"
+    lines = [f"{head}: {target['kind']} {target['value']}"]
+    if "cutoff" in result:
+        lines.append(f"cutoff: messages created before {result['cutoff']}")
+    lines.append(f"cache: {cache['matched']} matched, {cache['deleted']} deleted")
+    lines.append(
+        f"reports: {reports['runs_scanned']} runs scanned, "
+        f"{len(reports['runs_matched'])} matched, {len(reports['runs_removed'])} removed"
+    )
+    listed = reports["runs_matched"] if dry else reports["runs_removed"]
+    lines.extend(f"  {'would remove' if dry else 'removed'} {run}" for run in listed)
+    return "\n".join(lines)
+
+
+def cmd_discord_purge(args: argparse.Namespace) -> int:
+    author = getattr(args, "author", None)
+    channel = getattr(args, "channel", None)
+    older_than = getattr(args, "older_than", None)
+    given = [v for v in (author, channel, older_than) if v is not None]
+    if len(given) != 1:
+        raise CliError(
+            EXIT_USER_ERROR,
+            "purge needs exactly one target: --author ID, --channel ID or --older-than DAYS",
+            "name the single author id, channel id or retention window to purge; "
+            "nothing is ever deleted without an explicit target",
+        )
+    dry_run = not bool(getattr(args, "yes", False))
+    if author is not None:
+        result = _purge_mod.purge_author(author, dry_run=dry_run)
+    elif channel is not None:
+        result = _purge_mod.purge_channel(channel, dry_run=dry_run)
+    else:
+        result = _purge_mod.purge_older_than(older_than, dry_run=dry_run)
+    json_mode = bool(getattr(args, "json", False))
+    if json_mode:
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_purge_text(result), json_mode=False)
+    return 0
+
+
 # -- doctor -----------------------------------------------------------------
 
 
@@ -522,6 +572,9 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "links [--since D] [--concurrency C] [--include-bots] "
                 "[--from-cache RUN] [--json] — scan + write a shared-address "
                 "HTML report and CSVs",
+                "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
+                "[--json] — delete from the cache and derived reports "
+                "(preview unless --yes)",
                 "doctor — verify token + guild readable, jlab-mongodb cache "
                 "reachable, and cache content encryption measured",
                 "overview — describe this noun group",
@@ -548,7 +601,7 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "discord",
-        help="Read-only Discord scan (channels, read, active, members, links, doctor).",
+        help="Discord scan (channels, read, active, members, links) + cache purge, doctor.",
     )
     p.add_argument("--json", action="store_true", help=_JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
@@ -715,6 +768,28 @@ def register(sub: argparse._SubParsersAction) -> None:
         include_bots=False,
         from_cache=None,
     )
+
+    # purge
+    pg = noun_sub.add_parser(
+        "purge",
+        help="Delete an author's or channel's data from the cache and derived reports.",
+    )
+    pg.add_argument("--author", default=None, help="Discord author id to purge.")
+    pg.add_argument("--channel", default=None, help="Discord channel id to purge.")
+    pg.add_argument(
+        "--older-than",
+        dest="older_than",
+        type=int,
+        default=None,
+        help="Retention bound: purge messages and report runs older than DAYS.",
+    )
+    pg.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually delete. Without it the verb only previews what would be removed.",
+    )
+    pg.add_argument("--json", action="store_true", help=_JSON_HELP)
+    pg.set_defaults(func=cmd_discord_purge, json=False, yes=False)
 
     # doctor
     dr = noun_sub.add_parser(

@@ -285,6 +285,37 @@ message is the jump link in the same row, which is always live.
 """
 
 
+_DISCORD_PURGE = """\
+# jetson-ai-lab-cli discord purge
+
+Delete data from jlab's message cache **and** from every derived report that
+carries it — the runnable deletion path behind the privacy policy's promise
+to honour deletion requests, including derived indexes. Exactly one target is
+required:
+
+- `--author ID` — every cached message by that Discord author id, plus every
+  members/links report run whose artifacts mention the id;
+- `--channel ID` — every cached message from that channel, plus every report
+  run whose artifacts carry the channel id (links jump URLs);
+- `--older-than DAYS` — the retention bound: cached messages created, and
+  report runs written, more than DAYS ago.
+
+Safety: targets must be bare numeric ids (empty, wildcard and pattern targets
+exit 1 before anything is touched). **Without `--yes` the verb is a dry run**
+that reports what would be removed; with `--yes` it deletes and reports
+exactly what was removed. A report run is removed whole, never edited, because
+it is one rendered artifact set and is regenerable by re-running its verb.
+Re-running a purge is safe (idempotent).
+
+## Usage
+
+    jetson-ai-lab-cli discord purge --author 123456789012345678
+    jetson-ai-lab-cli discord purge --author 123456789012345678 --yes
+    jetson-ai-lab-cli discord purge --channel 123456789012345678 --yes --json
+    jetson-ai-lab-cli discord purge --older-than 365 --yes
+"""
+
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     # Console-script name (pyproject [project.scripts]); the rubric derives the
@@ -304,6 +335,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "active"): _DISCORD_ACTIVE,
     ("discord", "members"): _DISCORD_MEMBERS,
     ("discord", "links"): _DISCORD_LINKS,
+    ("discord", "purge"): _DISCORD_PURGE,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
 }
