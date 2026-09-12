@@ -95,7 +95,7 @@
 ## Honesty conditions
 
 - the announcement holds end to end: naming a public channel and a pattern returns matching message bodies from outside the most recent 100, and running the same query again serves them from the cache without a Discord request
-- the change set touches no file under ~/git/discord-bot-cli; anything missing upstream is worked around locally and marked as such, the way the existing WORKAROUND(discord-bot-cli#14) serializer is
+- the change set touches no file in the sibling discord-bot-cli repository (checkout location is operator-specific and resolved via `DISCORD_BOT_CLI_PROJECT`); anything missing upstream is worked around locally and marked as such, the way the existing WORKAROUND(discord-bot-cli#14) serializer is — supersedes h15, which hardcoded a home-directory path and should be rejected
 - fetching a private channel by explicit id is refused rather than served, and a test asserts it — the public check is re-applied to the id the caller passed, not inherited from a listing
 - no post, react, edit, delete or thread-create call exists anywhere in the change set, and the cache is written only from data the read path already returned
 - every new verb emits results on stdout and diagnostics on stderr, supports --json, and 'teken cli doctor . --strict' passes unchanged in CI
@@ -185,12 +185,15 @@
   - seeds: `c43`
 - `s28` — `challenge pass / adjacent-systems lens: upstream request agentculture/discord-bot-cli#19`: the gateway gap is now tracked upstream where the session seam lives, keeping the cite-don't-import boundary intact; this build does not depend on it landing, since the daily sweep is the correctness backstop
   - seeds: `c49`
+- `s29` — `challenge pass / PR #19 review triage: qodo findings against the exported spec and frame`: two of three findings are valid — a resolved hard question's text preserves a reversed answer that reads as current (q3, superseded by c52), and an honesty condition hardcoded a home-directory path (h15, superseded by h46); the third, forum coverage, is an already-recorded decision (c35) with a stated mitigation (h29) rather than an oversight
+  - seeds: `c52`
 
 ## Decisions
 
 - regex execution gets a defence: either an in-process guard or running the match inside a bounded sandbox such as the sibling headspace-cli, whose Policy model already ships closed-by-default budgets — `cpu_limit`, `wall_clock_seconds`, memory, pids and concurrency, with network DISABLED by default (headspace/core/policy.py:50-98)
 - the cost of re-reading a window to detect deletions is accepted and is not a reason to weaken the sweep: re-reading is a loop of code and cheap, while failing to respect a member's privacy is expensive — so the sweep's frequency and completeness are set by the privacy obligation, never trimmed to save requests
 - discord read serves from the Mongo cache, which the daily sweep keeps current, and gains a --refresh flag that forces a re-read from Discord when something may have been added or changed — so the cache is the default source of truth for read and the live path becomes explicit rather than implicit
+- AUTHORITATIVE MongoDB topology, superseding the stale resolution recorded on hard question q3: jlab runs its own dedicated jlab-mongodb instance on a port that is neither 27017 nor 27018. q3's resolution text still reads 'jlab writes to its own database on eidetic-mongo (27018)' because a resolved hard question is append-only and cannot be re-resolved — that answer was reversed by the user before export and must not be implemented; c23, c25, h20 and c25's instruction are the current record
 
 ## Hard questions
 

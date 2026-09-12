@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-12T15:17:25Z",
-  "updated": "2026-09-12T16:38:47Z",
+  "updated": "2026-09-12T16:47:13Z",
   "claims": [
     {
       "id": "c1",
@@ -122,6 +122,12 @@
         {
           "id": "h15",
           "text": "the change set touches no file under ~/git/discord-bot-cli; anything missing upstream is worked around locally and marked as such, the way the existing WORKAROUND(discord-bot-cli#14) serializer is",
+          "status": "rejected",
+          "instruction": ""
+        },
+        {
+          "id": "h46",
+          "text": "the change set touches no file in the sibling discord-bot-cli repository (checkout location is operator-specific and resolved via DISCORD_BOT_CLI_PROJECT); anything missing upstream is worked around locally and marked as such, the way the existing WORKAROUND(discord-bot-cli#14) serializer is \u2014 supersedes h15, which hardcoded a home-directory path and should be rejected",
           "status": "confirmed",
           "instruction": ""
         }
@@ -1059,6 +1065,18 @@
       "links": [],
       "instruction": "",
       "revisions": []
+    },
+    {
+      "id": "c52",
+      "kind": "decision",
+      "text": "AUTHORITATIVE MongoDB topology, superseding the stale resolution recorded on hard question q3: jlab runs its own dedicated jlab-mongodb instance on a port that is neither 27017 nor 27018. q3's resolution text still reads 'jlab writes to its own database on eidetic-mongo (27018)' because a resolved hard question is append-only and cannot be re-resolved \u2014 that answer was reversed by the user before export and must not be implemented; c23, c25, h20 and c25's instruction are the current record",
+      "origin": "user",
+      "status": "confirmed",
+      "honesty_conditions": [],
+      "hard_questions": [],
+      "links": [],
+      "instruction": "",
+      "revisions": []
     }
   ],
   "open_vagueness": [
@@ -1354,6 +1372,14 @@
       "finding": "the gateway gap is now tracked upstream where the session seam lives, keeping the cite-don't-import boundary intact; this build does not depend on it landing, since the daily sweep is the correctness backstop",
       "seeds": [
         "c49"
+      ]
+    },
+    {
+      "id": "s29",
+      "surface": "challenge pass / PR #19 review triage: qodo findings against the exported spec and frame",
+      "finding": "two of three findings are valid \u2014 a resolved hard question's text preserves a reversed answer that reads as current (q3, superseded by c52), and an honesty condition hardcoded a home-directory path (h15, superseded by h46); the third, forum coverage, is an already-recorded decision (c35) with a stated mitigation (h29) rather than an oversight",
+      "seeds": [
+        "c52"
       ]
     }
   ],
