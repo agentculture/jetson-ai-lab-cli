@@ -171,12 +171,31 @@ to include private/role-gated channels too.
 _DISCORD_READ = """\
 # jetson-ai-lab-cli discord read <channel_id>
 
-Read recent messages from a single channel. *limit* must be 1-100 (default 20).
+Read a single channel's most recent *limit* messages (default 20, no upper
+bound — pages past Discord's own 100-message-per-request cap).
+
+**Cache-served by default.** Without --refresh this NEVER contacts Discord:
+it serves the requested window from the local cache and reports whether that
+window is fully covered. On a covered window the output matches a live read;
+on an uncovered or partly covered window it reports the gap on stderr (plus
+`complete: false` and an additive `uncovered` list in --json) instead of
+returning an empty result that reads as "no messages".
+
+**--refresh is the only path that reaches Discord.** It fetches only what is
+missing (via the same guarded path `discord fetch` uses — guild + public
+check before any history read) and then serves from the cache, so the shape
+of the result is identical either way. A private or another guild's channel
+is refused (exit 1) before any Discord read, leaking no name or content.
+
+Because the cache never stores a resolved author display name, a
+cache-served message's `author.name`/`author.display_name` are `None`
+rather than a guess; text mode falls back to the raw author id.
 
 ## Usage
 
     jetson-ai-lab-cli discord read 1234567890
     jetson-ai-lab-cli discord read 1234567890 --limit 50
+    jetson-ai-lab-cli discord read 1234567890 --refresh
     jetson-ai-lab-cli discord read 1234567890 --json
 """
 

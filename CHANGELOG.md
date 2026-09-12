@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-13
+
+### Added
+
+- `jlab discord read --refresh`: the only path by which `read` now contacts Discord; it fetches missing history through the guarded `jlab.fetch.fetch_channel` path (guild + public check, gap-only fetch) and then serves from the cache.
+- `jlab discord read --json` gains an additive `uncovered` key (list of `{start,end}` gap intervals), present only when `complete` is `false`.
+
+### Changed
+
+- `jlab discord read` is now cache-served by default instead of live-by-default: on a covered window it returns the same messages in the same text/JSON shape as before; on an uncovered or partly covered window it reports the gap on stderr and points at `--refresh` instead of returning an empty result.
+- A cache-served read message never fabricates an author display name (the cache never stores one): `author.name`/`author.display_name` are `null`, and text mode falls back to the raw author id.
+
 ## [0.8.0] - 2026-09-12
 
 ### Added

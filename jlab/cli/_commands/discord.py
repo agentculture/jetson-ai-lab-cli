@@ -12,6 +12,7 @@ import argparse
 
 from jlab import fetch as _fetch_mod
 from jlab import purge as _purge_mod
+from jlab import read as _read_mod
 from jlab import sweep as _sweep_mod
 from jlab.cli import _discord
 from jlab.cli._commands import coverage as _coverage_cmd
@@ -76,26 +77,28 @@ def cmd_discord_channels(args: argparse.Namespace) -> int:
 
 
 def cmd_discord_read(args: argparse.Namespace) -> int:
-    channel_id = _discord.parse_id(args.channel_id, "channel_id")
     limit = int(getattr(args, "limit", 20))
-    result = _discord.read_messages(channel_id, limit=limit)
+    refresh = bool(getattr(args, "refresh", False))
+    result = _read_mod.serve_read(args.channel_id, limit=limit, refresh=refresh)
     messages = result["messages"]
     complete = result["complete"]
     json_mode = bool(getattr(args, "json", False))
     if not complete:
-        emit_diagnostic(f"read window not fully read: {result['reason']}")
+        emit_diagnostic(f"read window not fully cached: {result['reason']}")
+    payload = {
+        "channel_id": result["channel_id"],
+        "messages": messages,
+        "complete": complete,
+    }
+    if not complete:
+        # Additive: a covered-window result keeps the exact 3-key shape a
+        # live read has always emitted; only an incomplete one gains this.
+        payload["uncovered"] = result["uncovered"]
     if json_mode:
-        emit_result(
-            {
-                "channel_id": str(channel_id),
-                "messages": messages,
-                "complete": complete,
-            },
-            json_mode=True,
-        )
+        emit_result(payload, json_mode=True)
     else:
         for msg in messages:
-            author = msg["author"]["name"]
+            author = msg["author"].get("name") or msg["author"].get("id")
             ts = msg["created_at"] or "?"
             emit_result(
                 f"[{ts}] {author}: {msg['content']}",
@@ -671,7 +674,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
             "title": "Verbs",
             "items": [
                 "channels [--all] — list guild channels (public-only by default)",
-                "read <channel_id> [--limit N] — read recent messages from a channel",
+                "read <channel_id> [--limit N] [--refresh] — read recent messages, "
+                "served from the cache (--refresh re-reads Discord first)",
                 "active [--since D] [--limit N] [--top K] [--preview P] "
                 "[--concurrency C] — rank active channels",
                 "members [--since D] [--concurrency C] [--include-departed] "
@@ -739,7 +743,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     # read
     rd = noun_sub.add_parser(
         "read",
-        help="Read recent messages from a channel.",
+        help="Read recent messages, served from the cache (--refresh re-reads Discord).",
     )
     rd.add_argument("channel_id", help="Numeric channel id.")
     rd.add_argument(
@@ -748,8 +752,17 @@ def register(sub: argparse._SubParsersAction) -> None:
         default=20,
         help="Messages to fetch (default 20; no upper bound, pages past 100).",
     )
+    rd.add_argument(
+        "--refresh",
+        action="store_true",
+        help=(
+            "Fetch missing history from Discord first (via `discord fetch`'s "
+            "guarded path), then serve from the cache. The only way `read` "
+            "contacts Discord."
+        ),
+    )
     rd.add_argument("--json", action="store_true", help=_JSON_HELP)
-    rd.set_defaults(func=cmd_discord_read, json=False)
+    rd.set_defaults(func=cmd_discord_read, json=False, refresh=False)
 
     # active
     ac = noun_sub.add_parser(
