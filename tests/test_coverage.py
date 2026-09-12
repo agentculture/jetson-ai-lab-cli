@@ -796,3 +796,66 @@ def test_non_blocking_fetch_on_a_busy_channel_raises_before_fetching(
     assert "error" not in result, result.get("error")
     assert result["code"] == EXIT_ENV_ERROR
     assert fetch.spans == []
+
+
+# ---------------------------------------------------------------------------
+# trim_before — the retention purge narrows coverage, never widens it
+# ---------------------------------------------------------------------------
+
+
+def test_trim_before_drops_and_clips_spans_older_than_the_cutoff(
+    col: _FakeCollection, lock_home
+) -> None:
+    _coverage.widen_coverage("chan-1", _iv(_at(2024, 1), _at(2024, 6)), collection=col)
+    _coverage.widen_coverage("chan-1", _iv(_at(2025, 1), _at(2026, 3)), collection=col)
+    _coverage.widen_coverage("chan-1", _iv(_at(2026, 5), _at(2026, 6)), collection=col)
+    cutoff = _at(2025, 7)
+    after = _coverage.trim_before("chan-1", cutoff, collection=col)
+    assert after == [_iv(cutoff, _at(2026, 3)), _iv(_at(2026, 5), _at(2026, 6))]
+    assert _coverage.read_coverage("chan-1", collection=col) == after
+    # merge invariants hold on what was written back: sorted, disjoint
+    assert _coverage.merge(after) == after
+    before = _coverage.describe("chan-1", _iv(_at(2024, 1), cutoff), collection=col)
+    assert before["complete"] is False
+    assert before["covered"] == [_iv(cutoff, cutoff).to_dict()]  # only the boundary instant
+    later = _coverage.describe("chan-1", _iv(cutoff, _at(2026, 3)), collection=col)
+    assert later["complete"] is True
+
+
+def test_trim_before_leaves_spans_after_the_cutoff_untouched(
+    col: _FakeCollection, lock_home
+) -> None:
+    span = _iv(_at(2026, 5), _at(2026, 6))
+    _coverage.widen_coverage("chan-1", span, collection=col)
+    assert _coverage.trim_before("chan-1", _at(2026, 1), collection=col) == [span]
+
+
+def test_trim_before_removes_the_document_when_nothing_remains(
+    col: _FakeCollection, lock_home
+) -> None:
+    _coverage.widen_coverage("chan-1", _iv(_at(2024, 1), _at(2024, 6)), collection=col)
+    assert _coverage.trim_before("chan-1", _at(2025, 1), collection=col) == []
+    assert "chan-1" not in col.docs
+
+
+def test_trim_before_takes_the_channel_lock(
+    col: _FakeCollection, lock_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _coverage.widen_coverage("chan-1", _iv(_at(2024, 1), _at(2026, 6)), collection=col)
+    taken: list[str] = []
+    original = _coverage.channel_lock
+
+    @contextlib.contextmanager
+    def spy(channel_id, **kwargs):
+        taken.append(channel_id)
+        with original(channel_id, **kwargs):
+            yield
+
+    monkeypatch.setattr(_coverage, "channel_lock", spy)
+    _coverage.trim_before("chan-1", _at(2025, 1), collection=col)
+    assert taken == ["chan-1"]
+
+
+def test_trim_before_rejects_a_naive_cutoff(col: _FakeCollection, lock_home) -> None:
+    with pytest.raises(CliError):
+        _coverage.trim_before("chan-1", dt.datetime(2025, 1, 1), collection=col)

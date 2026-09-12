@@ -211,6 +211,11 @@ def _validate_channel_id(channel_id: Any) -> str:
     return value
 
 
+def is_valid_channel_id(channel_id: Any) -> bool:
+    """Whether *channel_id* can name a lock file (and so carry coverage)."""
+    return bool(_CHANNEL_ID_RE.match(str(channel_id)))
+
+
 def lock_path(channel_id: Any) -> Path:
     """Where *channel_id*'s lock file lives. Validates the id; creates nothing."""
     return lock_root() / f"{_validate_channel_id(channel_id)}{_LOCK_SUFFIX}"
@@ -464,6 +469,63 @@ def clear_coverage(channel_id: Any, *, collection: Any = None) -> None:
             col.delete_one({"_id": channel})
 
     _run_with(collection, action)
+
+
+def trim_before(
+    channel_id: Any,
+    cutoff: dt.datetime,
+    *,
+    collection: Any = None,
+    now: dt.datetime | None = None,
+) -> list[Interval]:
+    """Narrow *channel_id*'s coverage to what lies at or after *cutoff*.
+
+    The retention purge deletes every cached message created before *cutoff*;
+    coverage still claiming those spans would report a purged window as
+    complete. Intervals ending at or before *cutoff* are dropped, an interval
+    straddling it is clipped to ``[cutoff, end]`` (a message created exactly
+    at *cutoff* is not deleted, so that instant stays covered), and intervals
+    wholly after it are untouched. Only ever narrows — the result is a subset
+    of the input, so the merge invariants still hold. Runs under the channel
+    lock; an emptied record is deleted rather than stored empty.
+    """
+    channel = _validate_channel_id(channel_id)
+    if not isinstance(cutoff, dt.datetime) or cutoff.tzinfo is None:
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message="coverage trim cutoff must be a timezone-aware datetime",
+            remediation="pass an aware datetime, e.g. one with tzinfo=timezone.utc",
+        )
+    stamp = now or dt.datetime.now(UTC)
+
+    def action(col: Any) -> list[Interval]:
+        with channel_lock(channel):
+            kept = merge(
+                Interval(max(i.start, cutoff), i.end) for i in _read(col, channel) if i.end > cutoff
+            )
+            if not kept:
+                col.delete_one({"_id": channel})
+                return []
+            col.update_one(
+                {"_id": channel},
+                {
+                    "$set": {
+                        "schema": SCHEMA_VERSION,
+                        "channel_id": channel,
+                        "intervals": [{"start": i.start, "end": i.end} for i in kept],
+                        "updated_at": stamp,
+                    }
+                },
+                upsert=True,
+            )
+            return kept
+
+    return _run_with(collection, action)
+
+
+def covered_channels(*, collection: Any = None) -> list[str]:
+    """Every channel id that has a coverage record, sorted."""
+    return _run_with(collection, lambda col: sorted(str(doc.get("_id")) for doc in col.find({})))
 
 
 def fetch_missing(

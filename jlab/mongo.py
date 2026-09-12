@@ -50,6 +50,11 @@ MESSAGES_COLLECTION = "messages"
 # than leaving coverage that claims messages which are gone.
 COVERAGE_COLLECTION = "coverage"
 
+# Purge suppression list (deviation d3): one record per purged author, keyed by
+# an HMAC digest of the author id — never the id itself. Same database, so
+# :func:`jlab.cache.store_messages` can refuse a suppressed author's messages.
+SUPPRESSION_COLLECTION = "suppression"
+
 # The two mongod containers this machine already runs, neither of which is
 # jlab's: qq-mongodb (legacy) on 27017, eidetic-mongo (memory store) on
 # 27018. jlab-mongodb must run on neither.
@@ -200,6 +205,35 @@ def coverage_collection(uri: str | None = None) -> Iterator[Any]:
     """Yield the per-channel coverage collection — same guards as the messages."""
     with _collection(COVERAGE_COLLECTION, uri) as col:
         yield col
+
+
+@contextmanager
+def suppression_collection(uri: str | None = None) -> Iterator[Any]:
+    """Yield the purge suppression list — same guards as the messages."""
+    with _collection(SUPPRESSION_COLLECTION, uri) as col:
+        yield col
+
+
+def sibling_collection(collection: Any, name: str) -> Any:
+    """Return collection *name* from the same database as *collection*.
+
+    Lets a caller holding the messages handle reach coverage or the suppression
+    list **without opening a second client** (pymongo collections expose
+    ``.database``). A handle with no database raises :class:`CliError`
+    (code 2): a store that cannot find the suppression list must not write,
+    never silently skip the check.
+    """
+    database = getattr(collection, "database", None)
+    if database is None:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"cannot locate the {name!r} collection beside the given collection handle",
+            remediation=(
+                "pass a pymongo collection from jlab.mongo (message_collection) so its "
+                "sibling collections resolve in the same jlab-mongodb database"
+            ),
+        )
+    return database[name]
 
 
 def check_cache(uri: str | None = None) -> dict[str, object]:

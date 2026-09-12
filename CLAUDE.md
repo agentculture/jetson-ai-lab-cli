@@ -206,6 +206,24 @@ and patterns exit 1 before anything is touched. **Without `--yes` the verb is
 a dry run**; with it, it reports exactly what matched and what was removed.
 Re-running is idempotent.
 
+**Coverage, locks and suppression.** A purge never leaves `jlab/coverage.py`
+over-claiming: `--channel X --yes` clears X's coverage, and `--older-than
+DAYS --yes` trims every channel's coverage to the cutoff
+(`coverage.trim_before`), so a purged window reads back as a gap. Each runs
+under t6's per-channel `flock` — `--older-than` takes one channel's lock at a
+time (delete that channel's old messages + trim, release, next), never a
+guild-wide lock — blocking by default so cron waits out an in-flight fetch.
+`--author X --yes` leaves coverage alone and first records X in the
+`suppression` collection (`jlab/mongo.py::suppression_collection`) as a
+**keyed hash** — HMAC-SHA256 under an HKDF sub-key of `JLAB_CACHE_KEY`
+(`crypto.author_digest`), never the raw id — then deletes.
+`cache.store_messages` enforces it centrally: a suppressed author's messages
+are never written (re-checked after the write, so a racing purge wins), the
+summary reports `suppressed`, and a suppression record made under a different
+key makes stores refuse (exit 2) rather than silently re-admit the author.
+Missing key → exit 2 before anything is deleted. Dry runs change nothing,
+coverage and suppression included.
+
 **Retention is bounded, not indefinite.** The cache keeps full bodies only
 because paged read and regex search need them; `purge --older-than DAYS --yes`
 drops cached messages and report runs older than the window the operator's

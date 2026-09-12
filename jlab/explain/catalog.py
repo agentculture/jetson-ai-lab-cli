@@ -307,6 +307,18 @@ exactly what was removed. A report run is removed whole, never edited, because
 it is one rendered artifact set and is regenerable by re-running its verb.
 Re-running a purge is safe (idempotent).
 
+Coverage stays honest: `--channel` also clears that channel's cache coverage,
+and `--older-than` trims every channel's coverage to the cutoff, so a purged
+window reads back as a gap rather than as complete. Both run under the
+channel's coverage lock (one channel at a time), waiting for an in-flight
+fetch of that channel. `--author` leaves coverage unchanged and instead
+records the author in a suppression list, so no later fetch or sweep caches
+their messages again. The list keeps only a **keyed hash** of the author id
+(HMAC-SHA256 under a key derived from `JLAB_CACHE_KEY`), never the id itself;
+without the key the purge exits 2 before deleting anything. `--json` adds
+`coverage` (`channels`, `applied`) and, for `--author`, `suppression`
+(`recorded`, `already_present`). A dry run records and changes nothing.
+
 ## Usage
 
     jetson-ai-lab-cli discord purge --author 123456789012345678

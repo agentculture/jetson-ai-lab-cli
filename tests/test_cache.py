@@ -62,12 +62,25 @@ class _FakeCursor:
         return iter(self._docs)
 
 
+class _FakeDatabase:
+    def __init__(self) -> None:
+        self.collections: dict[str, "_FakeCollection"] = {}
+
+    def __getitem__(self, name: str) -> "_FakeCollection":
+        if name not in self.collections:
+            self.collections[name] = _FakeCollection(database=self)
+        return self.collections[name]
+
+
 class _FakeCollection:
     """Enough of a pymongo collection for the cache layer, and nothing more."""
 
-    def __init__(self) -> None:
+    def __init__(self, database: "_FakeDatabase | None" = None) -> None:
         self.docs: dict[str, dict] = {}
         self.index_calls: list[tuple] = []
+        # Sibling collections (suppression list) live in the same database, as
+        # with a real pymongo Collection's ``.database``.
+        self.database = database if database is not None else _FakeDatabase()
 
     # -- writes
     def update_one(self, flt: dict, update: dict, upsert: bool = False) -> None:

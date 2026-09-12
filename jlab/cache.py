@@ -112,6 +112,7 @@ def store_messages(
     messages: Iterable[dict],
     *,
     collection: Any = None,
+    suppression: Any = None,
     now: dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Encrypt and upsert *messages* into the cache; return a small summary.
@@ -120,6 +121,22 @@ def store_messages(
     ``JLAB_CACHE_KEY`` raises :class:`CliError` (code 2) with the collection
     left untouched. There is no path through this function that writes message
     content in the clear.
+
+    **Purge suppression (deviation d3) is enforced here, centrally.** A message
+    whose author matches a record in the suppression list (see
+    :func:`suppress_author`) is never written, so every caller — the fetch, the
+    reconciliation sweep — honours a purge without knowing about it. The
+    summary is ``{"stored": n, "suppressed": k}``. Two guards keep that true:
+
+    * the author digests are re-checked **after** the writes, and any message
+      whose author was suppressed in between is deleted again — a purge landing
+      between this function's check and its write cannot resurrect the author;
+    * a suppression record made under a different ``JLAB_CACHE_KEY`` would no
+      longer match its author's digest, silently re-admitting them; such a
+      record makes every store with authors refuse (code 2) instead.
+
+    *suppression* defaults to the suppression collection in the same database
+    as *collection* (:func:`jlab.mongo.sibling_collection`).
     """
     now = now or _utcnow()
     batch: Sequence[dict] = list(messages)
@@ -127,8 +144,57 @@ def store_messages(
 
     if collection is None:
         with _mongo.message_collection() as col:
-            return _upsert(col, documents)
-    return _upsert(collection, documents)
+            return _store(col, suppression, documents)
+    return _store(collection, suppression, documents)
+
+
+def _suppressed_authors(suppression: Any, digests: dict[str, str]) -> set[str]:
+    return {a for a, d in digests.items() if suppression.find_one({"_id": d}) is not None}
+
+
+def _refuse_foreign_key_records(suppression: Any, fingerprint: str) -> None:
+    stale = suppression.find_one({"key_fingerprint": {"$ne": fingerprint}})
+    if stale is not None:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=(
+                "the purge suppression list holds records made under a different "
+                f"{_crypto.KEY_ENV}; they cannot be matched, so caching is refused "
+                "rather than re-admitting purged authors"
+            ),
+            remediation=(
+                f"restore the {_crypto.KEY_ENV} the suppressions were recorded with, or "
+                "re-run `jetson-ai-lab-cli discord purge --author ID --yes` under the new "
+                "key for every recorded deletion request and then remove the old records"
+            ),
+        )
+
+
+def _store(collection: Any, suppression: Any, documents: Sequence[dict]) -> dict[str, Any]:
+    digests = {
+        a: _crypto.author_digest(a)
+        for a in sorted({d["author_id"] for d in documents if d.get("author_id")})
+    }
+    if not digests:
+        return {**_upsert(collection, documents), "suppressed": 0}
+    sup = (
+        suppression
+        if suppression is not None
+        else _mongo.sibling_collection(collection, _mongo.SUPPRESSION_COLLECTION)
+    )
+    _refuse_foreign_key_records(sup, _crypto.key_fingerprint())
+    blocked = _suppressed_authors(sup, digests)
+    allowed = [d for d in documents if d.get("author_id") not in blocked]
+    _upsert(collection, allowed)
+
+    # Re-check after writing: a purge that recorded its suppression and ran its
+    # delete between the check above and the writes must not be undone.
+    late = _suppressed_authors(sup, {a: digests[a] for a in digests if a not in blocked})
+    for doc in allowed:
+        if doc.get("author_id") in late:
+            collection.delete_one({"_id": doc["_id"]})
+    stored = sum(1 for d in allowed if d.get("author_id") not in late)
+    return {"stored": stored, "suppressed": len(documents) - stored}
 
 
 def _upsert(collection: Any, documents: Sequence[dict]) -> dict[str, Any]:
@@ -145,6 +211,38 @@ def _upsert(collection: Any, documents: Sequence[dict]) -> dict[str, Any]:
         doc["_id"] = _id
         doc["created_at"] = created
     return {"stored": len(documents)}
+
+
+def suppress_author(
+    author_id: str | int, *, collection: Any, now: dt.datetime | None = None
+) -> dict[str, Any]:
+    """Record *author_id* in the suppression list *collection*; idempotent.
+
+    The record's ``_id`` is :func:`jlab.crypto.author_digest` — an HMAC under
+    an HKDF sub-key of ``JLAB_CACHE_KEY`` — and **no field holds the raw author
+    id**. Re-suppressing an author leaves the one existing record unchanged
+    (``$setOnInsert`` only). Raises :class:`CliError` (code 2) with nothing
+    written when no key is configured. Returns
+    ``{"recorded": True, "already_present": bool}``.
+    """
+    target = _require_delete_value(author_id, "author_id")
+    digest = _crypto.author_digest(target)
+    fingerprint = _crypto.key_fingerprint()
+    existed = collection.find_one({"_id": digest}) is not None
+    collection.update_one(
+        {"_id": digest},
+        {
+            "$setOnInsert": {
+                "schema": SCHEMA_VERSION,
+                "kind": "author",
+                "digest": "HMAC-SHA256 under an HKDF-SHA256 sub-key of " + _crypto.KEY_ENV,
+                "key_fingerprint": fingerprint,
+                "suppressed_at": now or _utcnow(),
+            }
+        },
+        upsert=True,
+    )
+    return {"recorded": True, "already_present": existed}
 
 
 def _decrypt_document(doc: dict) -> dict[str, Any]:
@@ -349,9 +447,18 @@ def delete_by_channel(
 
 
 def delete_older_than(
-    cutoff: dt.datetime, *, collection: Any = None, dry_run: bool = False
+    cutoff: dt.datetime,
+    *,
+    channel_id: str | int | None = None,
+    collection: Any = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Delete every cached message created before *cutoff* (the retention bound)."""
+    """Delete every cached message created before *cutoff* (the retention bound).
+
+    With *channel_id*, only that channel's messages — which is how
+    :func:`jlab.purge.purge_older_than` deletes one channel at a time under
+    that channel's coverage lock.
+    """
     if not isinstance(cutoff, dt.datetime):
         raise CliError(
             code=EXIT_ENV_ERROR,
@@ -360,4 +467,14 @@ def delete_older_than(
         )
     if cutoff.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=dt.timezone.utc)
-    return _delete_where({"created_at": {"$lt": cutoff}}, collection, dry_run)
+    query: dict[str, Any] = {"created_at": {"$lt": cutoff}}
+    if channel_id is not None:
+        query = {"channel_id": _require_delete_value(channel_id, "channel_id"), **query}
+    return _delete_where(query, collection, dry_run)
+
+
+def old_message_channels(cutoff: dt.datetime, *, collection: Any) -> list[str]:
+    """Channel ids holding at least one cached message created before *cutoff*."""
+    return sorted(
+        str(c) for c in collection.distinct("channel_id", {"created_at": {"$lt": cutoff}})
+    )

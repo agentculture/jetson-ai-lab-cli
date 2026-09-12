@@ -493,6 +493,20 @@ def _purge_text(result: dict) -> str:
         f"reports: {reports['runs_scanned']} runs scanned, "
         f"{len(reports['runs_matched'])} matched, {len(reports['runs_removed'])} removed"
     )
+    coverage = result.get("coverage") or {"channels": []}
+    if target["kind"] == "author":
+        lines.append("coverage: unchanged (an author purge suppresses the author instead)")
+        suppression = result.get("suppression") or {}
+        if dry:
+            lines.append("suppression: would record a keyed hash of the author id (not the id)")
+        elif suppression.get("already_present"):
+            lines.append("suppression: already recorded as a keyed hash of the author id")
+        else:
+            lines.append("suppression: recorded a keyed hash of the author id (not the id)")
+    else:
+        verb = "cleared" if target["kind"] == "channel" else "trimmed to the cutoff"
+        verb = f"would be {verb}" if dry else verb
+        lines.append(f"coverage: {verb} for {len(coverage['channels'])} channel(s)")
     listed = reports["runs_matched"] if dry else reports["runs_removed"]
     lines.extend(f"  {'would remove' if dry else 'removed'} {run}" for run in listed)
     return "\n".join(lines)

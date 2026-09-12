@@ -385,3 +385,55 @@ def test_coverage_collection_rejects_legacy_ports(
         with _mongo.coverage_collection():
             pass
     assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# suppression_collection() / sibling_collection() — the purge suppression list
+# (deviation d3) is reached through this module, never a client of its own.
+# ---------------------------------------------------------------------------
+
+
+def test_suppression_collection_yields_its_own_collection_journaled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _RecordingPyMongoModule()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+    with _mongo.suppression_collection() as col:
+        assert col == f"collection:{_mongo.SUPPRESSION_COLLECTION}"
+    assert fake.last_client.closed is True
+    assert fake.client_kwargs.get("journal") is True
+    assert _mongo.SUPPRESSION_COLLECTION not in (
+        _mongo.MESSAGES_COLLECTION,
+        _mongo.COVERAGE_COLLECTION,
+    )
+
+
+@pytest.mark.parametrize("port", [27017, 27018])
+def test_suppression_collection_rejects_legacy_ports(
+    monkeypatch: pytest.MonkeyPatch, port: int
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, f"mongodb://localhost:{port}/jlab")
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.suppression_collection():
+            pass
+    assert exc.value.code == 2
+
+
+def test_sibling_collection_uses_the_same_database() -> None:
+    db = _FakeDatabase()
+
+    class _Col:
+        database = db
+
+    assert _mongo.sibling_collection(_Col(), "suppression") == "collection:suppression"
+    assert db.asked == ["suppression"]
+
+
+def test_sibling_collection_without_a_database_fails_closed() -> None:
+    """No way to find the suppression list means no write, never a silent skip."""
+    with pytest.raises(CliError) as exc:
+        _mongo.sibling_collection(object(), "suppression")
+    assert exc.value.code == 2
+    assert exc.value.remediation

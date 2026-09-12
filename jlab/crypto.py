@@ -73,6 +73,9 @@ _MIN_KEY_CHARS = 32
 _HKDF_SALT = b"jlab-cache-v1"
 _INFO_ENC = b"jlab-cache-v1/content-encryption"
 _INFO_MAC = b"jlab-cache-v1/content-authentication"
+# Distinct HKDF label for the purge-suppression HMAC key: never the AES content
+# key, never the raw passphrase.
+_INFO_SUPPRESSION = b"jlab-cache-v2/author-suppression-hmac"
 
 _MISSING_KEY_HINT = (
     f"set {KEY_ENV} to a high-entropy secret of at least {_MIN_KEY_CHARS} "
@@ -133,6 +136,35 @@ def _content_key() -> bytes:
     through HKDF before it reaches AES.
     """
     return _hkdf(_key_material(), b"jlab-cache-v2/aes-gcm", 32)
+
+
+def _suppression_key() -> bytes:
+    """Derive the 256-bit HMAC key for purge-suppression digests.
+
+    A separate HKDF output (label :data:`_INFO_SUPPRESSION`) from the content
+    key, so a digest reveals nothing usable against the ciphertext and vice
+    versa. Raises :class:`CliError` (code 2) when no key is configured.
+    """
+    return _hkdf(_key_material(), _INFO_SUPPRESSION, 32)
+
+
+def author_digest(author_id: str) -> str:
+    """HMAC-SHA256 of *author_id* under the suppression sub-key, hex-encoded.
+
+    This is what the purge suppression list stores **instead of** the author
+    id: deterministic under one key (so a later store can match it), but not
+    reversible and not a plain hash (so nobody without the key can confirm a
+    guessed id against the list). Rotating ``JLAB_CACHE_KEY`` changes every
+    digest — see :func:`jlab.cache.store_messages` for how that fails closed.
+    """
+    text = "" if author_id is None else str(author_id).strip()
+    if not text:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message="cannot derive a suppression digest for an empty author id",
+            remediation="pass one explicit Discord author id",
+        )
+    return hmac.new(_suppression_key(), text.encode("utf-8"), _HASH).hexdigest()
 
 
 def key_fingerprint() -> str:
