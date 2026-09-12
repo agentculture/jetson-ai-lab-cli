@@ -535,7 +535,9 @@ def read_messages(channel_id: int, limit: int = 20) -> dict:
     :func:`_collect_history` past that cap exactly like :func:`scan_window`
     already does. For a caller passing the default ``limit=20`` (or any
     value <= 100) this issues the same single ``channel.history(limit=...)``
-    call as before, so default output stays byte-identical.
+    call as before, so the messages returned — and the text-mode lines —
+    are unchanged. The ``--json`` payload gained a ``complete`` field, an
+    additive change: JSON consumers see one extra key.
 
     Returns ``{"messages": [...], "complete": bool, "reason": str | None}``.
     ``complete`` is ``False`` when a rate limit or a hard failure kept the

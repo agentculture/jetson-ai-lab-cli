@@ -758,31 +758,61 @@ def test_read_messages_no_longer_caps_at_100(monkeypatch: pytest.MonkeyPatch) ->
     assert len(set(ids)) == 250
 
 
-def test_read_messages_default_limit_byte_identical_to_a_single_page(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A caller passing no new flag gets exactly today's text-mode output."""
-    now = datetime.now(timezone.utc)
-    chan = _FakeChannel(
+def _two_message_channel() -> "_FakeChannel":
+    # A fixed instant: the text test builds this channel twice and compares
+    # timestamps across the two reads, so datetime.now() would never match.
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    return _FakeChannel(
         "c1",
         "general",
         "text",
         True,
         [_FakeMsg("m0", "ann", "hello", now), _FakeMsg("m1", "bob", "world", now)],
     )
-    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+
+
+def test_read_default_limit_text_lines_are_the_same_messages_in_the_same_format(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no new flag, text mode prints exactly one ``[ts] author: content`` line per message.
+
+    Was ``..._byte_identical_to_a_single_page``, which asserted only substrings and
+    never exercised --json; this pins the exact lines (timestamps taken from the
+    same fake's --json output) so a format change fails.
+    """
     monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
 
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
+    assert main(["discord", "read", "999", "--json"]) == 0
+    stamps = [m["created_at"] for m in json.loads(capsys.readouterr().out)["messages"]]
+
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
     rc = main(["discord", "read", "999"])
 
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.err == ""  # complete: nothing diagnostic to report
-    lines = captured.out.strip("\n").split("\n")
-    assert len(lines) == 2
-    assert "ann" in lines[0] and "hello" in lines[0]
-    assert "bob" in lines[1] and "world" in lines[1]
+    assert captured.out.strip("\n").split("\n") == [
+        f"[{stamps[0]}] ann: hello",
+        f"[{stamps[1]}] bob: world",
+    ]
+
+
+def test_read_json_adds_complete_as_an_additive_field(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--json keeps ``channel_id`` and ``messages`` and adds ``complete`` (t4, recorded as r17)."""
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
+    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+
+    assert main(["discord", "read", "999", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert set(payload) == {"channel_id", "messages", "complete"}
+    assert payload["complete"] is True
+    assert [m["content"] for m in payload["messages"]] == ["hello", "world"]
 
 
 def test_read_messages_429_mid_drain_retries_and_resumes(

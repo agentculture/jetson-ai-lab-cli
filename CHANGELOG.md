@@ -16,6 +16,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `jlab discord read --json` now includes a `complete` field reporting whether the requested window was fully read. The change is additive: `channel_id` and `messages` are unchanged, and text-mode output is the same.
 - CLAUDE.md and README now state the retention position explicitly: this path retains **full message bodies by decision**, beside the `members` no-content rule and the `links` URL-only rule, together with the encryption obligation and the honest limits of the construction.
 
 ## [0.7.1] - 2026-09-12
