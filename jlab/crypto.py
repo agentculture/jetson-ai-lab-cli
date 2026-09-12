@@ -17,33 +17,26 @@ plaintext mode: a missing, blank or too-short key raises
 caller writes nothing. Storing plaintext because the key was absent is the
 failure this module exists to prevent.
 
-**Construction, stated honestly.** jlab's runtime dependency set is
-deliberately near-empty (see CLAUDE.md) and the standard library ships no AEAD,
-so the envelope is built from :mod:`hmac`/:mod:`hashlib`/:mod:`secrets`:
+**Construction.** The envelope is **AES-256-GCM** from the ``cryptography``
+package (an approved runtime dependency — see CLAUDE.md), a standardised,
+independently reviewed AEAD. A 256-bit content key is derived from the
+configured passphrase with HKDF-SHA256 (RFC 5869), so the key material stored
+in the environment is never used as a raw cipher key. Each message gets a fresh
+96-bit nonce from :mod:`secrets`; GCM's tag authenticates the ciphertext and is
+verified before any plaintext is returned, so tampering raises rather than
+decrypting to garbage.
 
-* two sub-keys are derived from the configured key with HKDF-SHA256
-  (RFC 5869 extract-then-expand, implemented here over ``hmac``) — one for
-  confidentiality, one for authentication, so neither role reuses the other's
-  key material;
-* the message is XORed with a keystream generated as
-  ``HMAC-SHA256(enc_key, nonce || counter)`` over a 16-byte random nonce — a
-  counter-mode stream cipher whose PRF is HMAC-SHA256 rather than AES;
-* the result is authenticated encrypt-then-MAC with
-  ``HMAC-SHA256(mac_key, version || nonce || ciphertext)``, verified with
-  :func:`hmac.compare_digest` before a single byte is decrypted.
+This replaces an earlier hand-rolled HMAC-CTR composition. That construction
+was a sound assembly of standard primitives but had had no cryptographic
+review, which is a poor foundation for the encryption-at-rest commitment the
+published privacy policy makes; a reviewed AEAD was approved instead.
 
-**Limitations — do not overstate this.** This is a sound *composition* of
-standard primitives, but it is not a standardised, independently reviewed AEAD
-(AES-GCM, ChaCha20-Poly1305) and it has had no cryptographic review. It is
-markedly slower than AES for large payloads. It protects content **at rest in
-jlab-mongodb** against someone reading the database files, a stolen volume or a
-mongodump — it does **not** protect against an attacker who also has the key,
-who can read the jlab process's memory, or who can read the environment it runs
-in. Ciphertext length reveals plaintext length, and the document's metadata
-(channel id, author id, timestamps, jump URL) is deliberately left in the clear
-so the cache remains queryable. There is no key rotation: re-keying means
-re-fetching the corpus. If a vetted AEAD library is ever approved into the
-dependency allowlist, this module is the one place to swap.
+**Limitations — still worth stating.** Encryption protects content **at rest in
+jlab-mongodb** — against someone reading the database files, a stolen volume, a
+mongodump. It does **not** protect against an attacker who also holds the key,
+the process memory or the environment. Ciphertext length still leaks plaintext
+length. There is no key rotation: re-keying means re-fetching the affected
+channels, because jlab never keeps a plaintext copy to re-encrypt from.
 """
 
 from __future__ import annotations
@@ -54,6 +47,9 @@ import hmac
 import os
 import secrets
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from jlab.cli._errors import EXIT_ENV_ERROR, CliError
 
 #: The only environment variable this project reads for the cache key.
@@ -61,14 +57,14 @@ KEY_ENV = "JLAB_CACHE_KEY"
 
 #: Envelope format version. Bumped if the construction ever changes; an
 #: unknown version is refused rather than guessed at.
-ENVELOPE_VERSION = 1
+ENVELOPE_VERSION = 2
 
 #: Short human name of the construction, surfaced by ``doctor``.
 ALGORITHM = "HKDF-SHA256 + HMAC-SHA256 keystream (CTR), encrypt-then-MAC HMAC-SHA256"
 
 _HASH = hashlib.sha256
 _DIGEST_SIZE = _HASH().digest_size
-_NONCE_BYTES = 16
+_NONCE_BYTES = 12  # AES-GCM standard nonce size (NIST SP 800-38D)
 
 # A key shorter than this is refused: the construction's strength is bounded by
 # the key, and a four-character passphrase in an env var is not encryption.
@@ -130,23 +126,13 @@ def _hkdf(key_material: bytes, info: bytes, length: int = _DIGEST_SIZE) -> bytes
     return out[:length]
 
 
-def _keystream(enc_key: bytes, nonce: bytes, length: int) -> bytes:
-    """``HMAC-SHA256(enc_key, nonce || counter)`` in counter mode."""
-    out = bytearray()
-    counter = 0
-    while len(out) < length:
-        out += hmac.new(enc_key, nonce + counter.to_bytes(8, "big"), _HASH).digest()
-        counter += 1
-    return bytes(out[:length])
+def _content_key() -> bytes:
+    """Derive the 256-bit AES-GCM content key from the configured passphrase.
 
-
-def _sub_keys() -> tuple[bytes, bytes]:
-    material = _key_material()
-    return _hkdf(material, _INFO_ENC), _hkdf(material, _INFO_MAC)
-
-
-def _tag(mac_key: bytes, version: int, nonce: bytes, ciphertext: bytes) -> bytes:
-    return hmac.new(mac_key, bytes([version]) + nonce + ciphertext, _HASH).digest()
+    The environment value is a passphrase, never a raw cipher key, so it is run
+    through HKDF before it reaches AES.
+    """
+    return _hkdf(_key_material(), b"jlab-cache-v2/aes-gcm", 32)
 
 
 def key_fingerprint() -> str:
@@ -170,16 +156,12 @@ def encrypt(plaintext: str) -> dict[str, object]:
             message="only text can be encrypted for the cache",
             remediation="pass the message content as a string",
         )
-    enc_key, mac_key = _sub_keys()
-    data = plaintext.encode("utf-8")
     nonce = secrets.token_bytes(_NONCE_BYTES)
-    stream = _keystream(enc_key, nonce, len(data))
-    ciphertext = bytes(a ^ b for a, b in zip(data, stream))
+    sealed = AESGCM(_content_key()).encrypt(nonce, plaintext.encode("utf-8"), None)
     return {
         "v": ENVELOPE_VERSION,
         "n": base64.b64encode(nonce).decode("ascii"),
-        "c": base64.b64encode(ciphertext).decode("ascii"),
-        "t": base64.b64encode(_tag(mac_key, ENVELOPE_VERSION, nonce, ciphertext)).decode("ascii"),
+        "c": base64.b64encode(sealed).decode("ascii"),
     }
 
 
@@ -210,17 +192,17 @@ def decrypt(envelope: object) -> str:
         raise _bad_envelope(f"unsupported envelope version {version!r}")
     try:
         nonce = base64.b64decode(str(envelope["n"]), validate=True)
-        ciphertext = base64.b64decode(str(envelope["c"]), validate=True)
-        tag = base64.b64decode(str(envelope["t"]), validate=True)
+        sealed = base64.b64decode(str(envelope["c"]), validate=True)
     except (KeyError, ValueError, TypeError):
         raise _bad_envelope("envelope is malformed")
 
-    enc_key, mac_key = _sub_keys()
-    if not hmac.compare_digest(tag, _tag(mac_key, ENVELOPE_VERSION, nonce, ciphertext)):
-        raise _bad_envelope("authentication failed (wrong key or altered ciphertext)")
-
-    stream = _keystream(enc_key, nonce, len(ciphertext))
     try:
-        return bytes(a ^ b for a, b in zip(ciphertext, stream)).decode("utf-8")
+        plaintext = AESGCM(_content_key()).decrypt(nonce, sealed, None)
+    except InvalidTag:
+        raise _bad_envelope("authentication failed (wrong key or altered ciphertext)")
+    except ValueError:
+        raise _bad_envelope("envelope is malformed")
+    try:
+        return plaintext.decode("utf-8")
     except UnicodeDecodeError:
         raise _bad_envelope("decrypted bytes are not valid UTF-8")

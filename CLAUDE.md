@@ -309,7 +309,10 @@ new surface must keep these true, or the build fails:
 
 - **Approved-dependencies allowlist.** Runtime and optional dependencies are restricted
   to an approved list: `discord-bot-cli` (optional `[discord]` extra, lazy-imported),
-  and `pymongo` (for MongoDB cache). Any other library needs are a deliberate decision
+  `pymongo` (the MongoDB cache), and `cryptography` (AES-256-GCM for the cache's
+  encryption at rest — approved deliberately in preference to a hand-rolled
+  construction, because that encryption backs a published compliance commitment and
+  unreviewed crypto is a poor foundation for one). Any other library needs are a deliberate decision
   to discuss — don't quietly add deps to the runtime package. The allowlist is enforced
   mechanically by a test that reads `pyproject.toml` and fails the build when a
   distribution is missing from the approval list, so adding a dependency without

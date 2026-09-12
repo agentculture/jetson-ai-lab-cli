@@ -257,7 +257,9 @@ def test_stored_document_holds_no_plaintext(key: str) -> None:
     raw = col.docs["1"]
     assert "orin nano devkit" not in repr(raw)
     assert not isinstance(raw["content"], str)
-    assert set(raw["content"]) >= {"v", "n", "c", "t"}
+    # AES-GCM folds the authentication tag into the ciphertext, so the
+    # envelope carries version, nonce and sealed bytes only.
+    assert set(raw["content"]) >= {"v", "n", "c"}
 
 
 def test_store_and_fetch_round_trip(key: str) -> None:

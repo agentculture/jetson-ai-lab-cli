@@ -5,7 +5,7 @@
   "schema_version": 5,
   "status": "exported",
   "created": "2026-09-12T16:48:39Z",
-  "updated": "2026-09-12T16:55:42Z",
+  "updated": "2026-09-12T18:09:40Z",
   "targets": [
     {
       "id": "c1",
@@ -916,6 +916,54 @@
     {
       "id": "r4",
       "text": "c35 (forums and threads excluded from the corpus) remains an unconfirmed assumption on the frame and is therefore not a coverage target \u2014 no task covers it, so the coverage-reporting mitigation h29 is carried by t8's gap-reporting criterion rather than by a dedicated task",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r5",
+      "text": "measured during wave 1: an associate-model review takes minutes per task (a t2 review was still running at 2m46s against a 280s timeout) and the task agent blocks on it, so the per-task review criterion adds serial latency to every task and can time out before returning \u2014 budget for it, and treat a timed-out review as an unreviewed task rather than a passed one",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r6",
+      "text": "wave-1 evidence that the associate review is not a substitute for the merging agent's own inspection: t1's review reported 'no concrete defects' on a diff that carried a dependency-spec parser mishandling '~=' and '!=' constraints and two tests whose names no longer matched their assertions, both caught only at the TDD gate",
+      "kind": "follow_up",
+      "task_id": "t1",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r7",
+      "text": "t3 self-reported, associate review missed: the backward-paging stall guard is one-sided \u2014 it checks a page's oldest timestamp against the REQUESTED cursor, not that the cursor variable changed between iterations. A mutation that reassigns the cursor to something not derived from 'oldest' loops forever and HANGS the suite rather than failing it. Deliberately untested because it is unreachable from any fake channel; t4 and t7 rewrite this loop's caller and must know it exists",
+      "kind": "unknown_nonblocking",
+      "task_id": "t3",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r8",
+      "text": "t3 self-reported: the paging cursor is a datetime rather than a snowflake id, chosen for symmetry with the existing after= cursor. A full 100-message page sharing one created_at would report partial rather than advancing \u2014 honest degradation, not loss, and effectively impossible at Discord's millisecond precision. Using message.id (discord.py accepts an object with .id for before=) would remove the edge; worth considering in t7",
+      "kind": "follow_up",
+      "task_id": "t3",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r9",
+      "text": "t5 self-reported, associate review missed: if the process is killed between the encryption probe's store and its finally-delete, an encrypted probe document survives in the messages collection under channel id __jlab_encryption_probe__ \u2014 harmless ciphertext, but the reconciliation sweep (t11) should reap that prefix",
+      "kind": "follow_up",
+      "task_id": "t11",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r10",
+      "text": "measured across waves 1-2: the associate review returned 'no concrete defects' on every task including two that carried real defects (t1) and read t3's diff as a proposal rather than shipped code. Its @file attachment silently returns empty output with exit 0, and sharper adversarial re-prompts time out at ~560s. Treat it as a weak second signal, never as a gate",
       "kind": "unknown_nonblocking",
       "task_id": null,
       "resolved": false,

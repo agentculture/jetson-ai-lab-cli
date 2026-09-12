@@ -12,6 +12,7 @@ from pathlib import Path
 APPROVED_DEPENDENCIES = {
     "discord-bot-cli",
     "pymongo",
+    "cryptography",
 }
 
 
