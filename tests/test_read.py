@@ -36,7 +36,6 @@ from tests.test_cache import _FakeCollection
 from tests.test_discord import (
     _BackwardChannel,
     _FakeGuild,
-    _FakeMsg,
     _FakeSeam,
     _window_msgs,
 )
@@ -215,7 +214,9 @@ def test_cli_read_reports_gap_on_stderr_and_json_without_refresh(
             "messages": [],
             "complete": False,
             "reason": "2 gap(s) ...; pass --refresh to fetch them from Discord",
-            "uncovered": [{"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}],
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
         },
     )
     rc = main(["discord", "read", "999", "--json"])

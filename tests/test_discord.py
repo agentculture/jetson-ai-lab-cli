@@ -253,7 +253,9 @@ def test_discord_read_incomplete_reports_gap_on_stderr(
             "messages": canned,
             "complete": False,
             "reason": "rate limited: retries exhausted",
-            "uncovered": [{"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}],
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
         },
     )
     rc = main(["discord", "read", "456", "--json"])
@@ -945,7 +947,9 @@ def test_discord_read_cli_reports_incomplete_on_stderr_not_silent_truncation(
             "messages": canned,
             "complete": False,
             "reason": "read failed after 1 messages: connection reset",
-            "uncovered": [{"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}],
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
         },
     )
 
