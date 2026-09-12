@@ -184,7 +184,7 @@ def test_discord_read_json(
     ]
     monkeypatch.setattr(
         "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: canned,
+        lambda channel_id, limit=20: {"messages": canned, "complete": True, "reason": None},
     )
     monkeypatch.setattr(
         "jlab.cli._discord.parse_id",
@@ -196,6 +196,7 @@ def test_discord_read_json(
     assert payload["channel_id"] == "123"
     assert len(payload["messages"]) == 1
     assert payload["messages"][0]["author"]["name"] == "alice"
+    assert payload["complete"] is True
 
 
 def test_discord_read_text(
@@ -212,7 +213,7 @@ def test_discord_read_text(
     ]
     monkeypatch.setattr(
         "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: canned,
+        lambda channel_id, limit=20: {"messages": canned, "complete": True, "reason": None},
     )
     monkeypatch.setattr(
         "jlab.cli._discord.parse_id",
@@ -223,6 +224,39 @@ def test_discord_read_text(
     out = capsys.readouterr().out
     assert "bob" in out
     assert "world" in out
+
+
+def test_discord_read_incomplete_reports_gap_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A truncated read is reported, not silently served as if complete."""
+    canned = [
+        {
+            "id": "msg1",
+            "author": {"id": "a1", "name": "bob"},
+            "content": "world",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    monkeypatch.setattr(
+        "jlab.cli._discord.read_messages",
+        lambda channel_id, limit=20: {
+            "messages": canned,
+            "complete": False,
+            "reason": "rate limited: retries exhausted",
+        },
+    )
+    monkeypatch.setattr(
+        "jlab.cli._discord.parse_id",
+        lambda value, label: int(value),
+    )
+    rc = main(["discord", "read", "456", "--json"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["complete"] is False
+    assert "rate limited" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -695,17 +729,166 @@ def test_read_messages_serializes(monkeypatch: pytest.MonkeyPatch) -> None:
         [_FakeMsg("m0", "ann", "first", now), _FakeMsg("m1", "bob", "second", now)],
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msgs = _discord.read_messages(999, limit=5)
+    result = _discord.read_messages(999, limit=5)
+    msgs = result["messages"]
     assert [m["author"]["name"] for m in msgs] == ["ann", "bob"]  # oldest-first
     assert msgs[0]["content"] == "first"
     assert msgs[0]["created_at"] is not None
+    assert result["complete"] is True
+    assert result["reason"] is None
 
 
 def test_read_messages_rejects_bad_limit() -> None:
-    for bad in (0, 101):
+    for bad in (0, -1):
         with pytest.raises(CliError) as exc:
             _discord.read_messages(999, limit=bad)
         assert exc.value.code == 1
+
+
+def test_read_messages_no_longer_caps_at_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old 1-100 ceiling was jlab's own bound, not Discord's; it is lifted."""
+    chan = _BackwardChannel("c1", "deep", _window_msgs(250))
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    result = _discord.read_messages(999, limit=250)
+    assert len(result["messages"]) == 250
+    assert result["complete"] is True
+    # 100 + 100 + 50: paging past the 100-message cap actually happened.
+    assert len(chan.history_calls) == 3
+    ids = [m["id"] for m in result["messages"]]
+    assert len(set(ids)) == 250
+
+
+def test_read_messages_default_limit_byte_identical_to_a_single_page(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A caller passing no new flag gets exactly today's text-mode output."""
+    now = datetime.now(timezone.utc)
+    chan = _FakeChannel(
+        "c1",
+        "general",
+        "text",
+        True,
+        [_FakeMsg("m0", "ann", "hello", now), _FakeMsg("m1", "bob", "world", now)],
+    )
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+
+    rc = main(["discord", "read", "999"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""  # complete: nothing diagnostic to report
+    lines = captured.out.strip("\n").split("\n")
+    assert len(lines) == 2
+    assert "ann" in lines[0] and "hello" in lines[0]
+    assert "bob" in lines[1] and "world" in lines[1]
+
+
+def test_read_messages_429_mid_drain_retries_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """o5: a 429 mid-drain is retried with clamped backoff and resumed."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+    msgs = _window_msgs(250)
+    chan = _BackwardRateLimitedOnceChannel("c1", "deep", msgs)
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+
+    result = _discord.read_messages(999, limit=250)
+
+    assert slept == [0.25]  # the server's own retry_after, clamped and honoured
+    assert result["complete"] is True
+    assert result["reason"] is None
+    ids = [m["id"] for m in result["messages"]]
+    assert len(set(ids)) == 250
+    assert sorted(ids) == sorted(m.id for m in msgs)
+
+
+def test_read_messages_reports_incomplete_rather_than_truncating_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """o5: a mid-drain failure is reported as incomplete, not served as if whole."""
+
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("c1", "deep", _window_msgs(250))
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+
+    result = _discord.read_messages(999, limit=250)
+
+    assert result["complete"] is False
+    assert "connection reset" in result["reason"]
+    assert len(result["messages"]) == 100
+
+
+def test_discord_read_cli_reports_incomplete_on_stderr_not_silent_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """o5 at the CLI boundary: the verb surfaces the gap, not an empty/quiet result."""
+
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("c1", "deep", _window_msgs(250))
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+
+    rc = main(["discord", "read", "999", "--limit", "250", "--json"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["complete"] is False
+    assert len(payload["messages"]) == 100  # what WAS read, not silently dropped
+    assert "error:" not in captured.err  # not a hard failure, still a reported gap
+    assert "connection reset" in captured.err
 
 
 def test_parse_id_happy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1491,7 +1674,7 @@ def test_read_messages_author_carries_bot_and_display_name(
         "c1", "general", "text", True, [_FakeMsg("m0", "ann", "hi", now, global_name="Ann")]
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msgs = _discord.read_messages(999, limit=5)
+    msgs = _discord.read_messages(999, limit=5)["messages"]
     assert msgs[0]["author"]["bot"] is False
     assert msgs[0]["author"]["display_name"] == "Ann"
     assert msgs[0]["author"]["name"] == "ann"  # existing key preserved
@@ -1749,7 +1932,7 @@ def test_read_messages_carries_links_and_channel(monkeypatch: pytest.MonkeyPatch
         ],
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msg = _discord.read_messages(999, limit=5)[0]
+    msg = _discord.read_messages(999, limit=5)["messages"][0]
     assert msg["attachments"][0]["url"] == "https://cdn/n.png"
     assert msg["embeds"][0]["url"] == "https://example.org"
     assert msg["jump_url"] == "https://discord.com/channels/1/c1/m0"

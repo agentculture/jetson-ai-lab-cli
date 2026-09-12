@@ -522,23 +522,44 @@ def _ordered(messages: list) -> list:
     return stamped + unstamped
 
 
-def read_messages(channel_id: int, limit: int = 20) -> list[dict]:
-    """Read recent messages from a channel.
+def read_messages(channel_id: int, limit: int = 20) -> dict:
+    """Read a channel's most recent *limit* messages, oldest first.
 
-    *limit* must be between 1 and 100 inclusive.
+    *limit* has no upper bound: it is jlab's own bound, not a Discord one
+    (Discord clamps a single request to 100), so this pages backward through
+    :func:`_collect_history` past that cap exactly like :func:`scan_window`
+    already does. For a caller passing the default ``limit=20`` (or any
+    value <= 100) this issues the same single ``channel.history(limit=...)``
+    call as before, so default output stays byte-identical.
+
+    Returns ``{"messages": [...], "complete": bool, "reason": str | None}``.
+    ``complete`` is ``False`` when a rate limit or a hard failure kept the
+    requested window from being fully read — the caller must report that
+    rather than silently returning a truncated result.
     """
-    if not 1 <= limit <= 100:
+    if limit < 1:
         raise CliError(
             code=1,
-            message=f"--limit must be 1-100, got {limit}",
-            remediation="pass a value between 1 and 100",
+            message=f"--limit must be >= 1, got {limit}",
+            remediation="pass a positive integer",
         )
 
-    async def action(client: Any) -> list[dict]:
+    async def action(client: Any) -> dict:
         channel = await client.fetch_channel(channel_id)
-        collected = [m async for m in channel.history(limit=limit)]
+        collected, complete, reason = await _collect_history(
+            channel,
+            limit=limit,
+            after=None,
+            before=None,
+            backward=True,
+            max_messages=None,
+        )
         collected.reverse()  # history yields newest-first; emit oldest-first
-        return [_serialize_message(m, channel) for m in collected]
+        return {
+            "messages": [_serialize_message(m, channel) for m in collected],
+            "complete": complete,
+            "reason": reason,
+        }
 
     return _run(action)
 
