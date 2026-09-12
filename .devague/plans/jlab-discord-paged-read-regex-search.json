@@ -1,0 +1,926 @@
+{
+  "slug": "jlab-discord-paged-read-regex-search",
+  "title": "jlab discord paged read + regex search",
+  "frame_slug": "jlab-discord-paged-read-regex-search",
+  "schema_version": 5,
+  "status": "exported",
+  "created": "2026-09-12T16:48:39Z",
+  "updated": "2026-09-12T16:55:42Z",
+  "targets": [
+    {
+      "id": "c1",
+      "kind": "announcement",
+      "text": "jlab discord reads a channel's full history past the 100-message cap and filters it with a regex",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h12",
+      "kind": "honesty",
+      "text": "the announcement holds end to end: naming a public channel and a pattern returns matching message bodies from outside the most recent 100, and running the same query again serves them from the cache without a Discord request",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c2",
+      "kind": "requirement",
+      "text": "the 100-message ceiling is jlab's own hardcoded bound, not a Discord limit: jlab/cli/_discord.py:422 validates 'if not 1 <= limit <= 100' and line 431 issues a single unwindowed channel.history(limit=limit) \u2014 lifting the ceiling means replacing that one call, not working around an API cap",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h38",
+      "kind": "honesty",
+      "text": "read returns the same messages as today once the channel's window is covered, and on an uncovered window says so rather than returning empty \u2014 supersedes h1, which promised byte-identical output unconditionally and is no longer true now that read is cache-served; h1 should be rejected",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c3",
+      "kind": "requirement",
+      "text": "a backward (older-direction) cursor does not exist yet: _history/_drain/_collect_history (jlab/cli/_discord.py:307-406) thread only 'after=' through, never 'before=', so the 'last X, then the X before those' sliding window is new code even though forward paging is solved",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h2",
+      "kind": "honesty",
+      "text": "the backward cursor is exercised against a fake channel deeper than one 100-message page, so the paging loop is proven to advance rather than re-fetching the same page",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c5",
+      "kind": "requirement",
+      "text": "no regex, search, or content-filter code exists anywhere in the discord seam: a full read of jlab/cli/_discord.py and jlab/cli/_commands/discord.py found no 'import re'; the only regex under jlab/ is _URL_RE in jlab/links/extract.py:143, which filters already-collected message dicts for URLs and is not a streaming search primitive \u2014 the matching stage is entirely new",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h3",
+      "kind": "honesty",
+      "text": "a malformed --grep pattern exits 1 with an error:/hint: pair and no traceback, matching the existing user-input error precedent",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c7",
+      "kind": "boundary",
+      "text": "discord-bot-cli is cited, not edited: jlab reuses only the discord_client.run/parse_id/require_token session seam (jlab/cli/_discord.py:68-81,104-120) and already carries a local WORKAROUND(discord-bot-cli#14) serializer (:14-20,272-296); this feature must not add a fix to the sibling repo",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h46",
+      "kind": "honesty",
+      "text": "the change set touches no file in the sibling discord-bot-cli repository (checkout location is operator-specific and resolved via DISCORD_BOT_CLI_PROJECT); anything missing upstream is worked around locally and marked as such, the way the existing WORKAROUND(discord-bot-cli#14) serializer is \u2014 supersedes h15, which hardcoded a home-directory path and should be rejected",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c8",
+      "kind": "boundary",
+      "text": "the public-only filter stays ahead of every fetch: _channel_public (jlab/cli/_discord.py:137-142) and _public_text_channels (:543-555) gate channels before any history() call, and a paged read that takes an explicit channel id must apply the same check rather than trusting the id it was handed",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h16",
+      "kind": "honesty",
+      "text": "fetching a private channel by explicit id is refused rather than served, and a test asserts it \u2014 the public check is re-applied to the id the caller passed, not inherited from a listing",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c9",
+      "kind": "boundary",
+      "text": "read-only stays read-only: the seam exposes no post/react/thread path and the skill's framing (.claude/skills/jetson-discord-scan/SKILL.md) states it never posts \u2014 paging and searching add read volume, never a write verb",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h17",
+      "kind": "honesty",
+      "text": "no post, react, edit, delete or thread-create call exists anywhere in the change set, and the cache is written only from data the read path already returned",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c10",
+      "kind": "requirement",
+      "text": "all paging happens inside one action coroutine per invocation: discord_client.run does a one-shot asyncio.run with login/close in a finally (discord_bot_cli/discord_client.py:101-118,121-188), so there is no long-lived session to carry a cursor between CLI calls \u2014 either the whole sliding window is drained in one process, or the cursor is persisted to disk explicitly",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h4",
+      "kind": "honesty",
+      "text": "a full backward drain completes inside one action coroutine per invocation, or the cursor it persists is durable enough that the next invocation resumes without re-reading what it already has",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c11",
+      "kind": "requirement",
+      "text": "this verb inverts the repo's content-retention rule and must say so out loud: members drops content at aggregation (jlab/members/aggregate.py:38-58,:119-122 keep only len() and a bool) and links keeps the URL and nothing else (jlab/links/extract.py:245-258) \u2014 a regex search over message bodies cannot exist without surfacing the body text itself, so retention has to be a stated, bounded decision rather than an accident",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h5",
+      "kind": "honesty",
+      "text": "CLAUDE.md gains an explicit statement that this path retains full message bodies, written as a deliberate third position alongside the members no-content rule and the links URL-only rule, not left for a reader to infer",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c12",
+      "kind": "boundary",
+      "text": "the agent-first contracts hold unchanged: results to stdout and diagnostics to stderr via jlab/cli/_output.py:17-53, --json on every command, and failures as CliError(EXIT_USER_ERROR=1) \u2014 a malformed --grep pattern is user input, matching the code-1 precedent at jlab/cli/_discord.py:123-134 and _commands/discord.py:216-229, not an environment error",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h18",
+      "kind": "honesty",
+      "text": "every new verb emits results on stdout and diagnostics on stderr, supports --json, and 'teken cli doctor . --strict' passes unchanged in CI",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c13",
+      "kind": "requirement",
+      "text": "an explain catalog entry is mandatory and machine-enforced: tests/test_cli.py:127-164 walks the live argparse parser and fails if any registered path is missing from jlab/explain/catalog.py::ENTRIES, whose discord keys are flat two-level tuples (catalog.py:276-297) \u2014 the gap this test was added to close",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h6",
+      "kind": "honesty",
+      "text": "every new verb path resolves through 'explain' and the parser-walking test in tests/test_cli.py:127-164 passes without being amended to excuse it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c15",
+      "kind": "requirement",
+      "text": "rate-limit protection is a stated requirement of this feature, not an inherited nicety: a backward drain issues far more sequential requests than any existing verb, so the paging loop must carry explicit 429 handling and backoff rather than relying on discord.py's internal sleep-and-retry",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h7",
+      "kind": "honesty",
+      "text": "a simulated 429 mid-drain is retried with backoff and the scan resumes from its cursor rather than restarting or silently truncating, and the result reports whether the window was fully read",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c16",
+      "kind": "audience",
+      "text": "Jetson AI Lab maintainers and the jetson-ai-lab-cli agent itself, who need to read what was actually said in a public channel \u2014 not just how much was said (active) or what was linked (links)",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h23",
+      "kind": "honesty",
+      "text": "the output is usable by both named audiences without a second tool: a maintainer reads the rendered report, and the agent consumes the same run via --json",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c17",
+      "kind": "before_state",
+      "text": "jlab discord read shows at most the 100 most recent messages of one channel and offers no way to filter them; anything older is reachable only as a count (active) or a URL (links), never as text, so a maintainer asking 'what did people say about X in September' has no command to run",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h24",
+      "kind": "honesty",
+      "text": "the stated gap is real and reproducible today: 'discord read' on a busy channel returns only its most recent 100 messages, and no existing verb returns message text from outside that window",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c18",
+      "kind": "after_state",
+      "text": "jlab fetches a public channel's history backwards past the 100-message ceiling into a local MongoDB cache, fetching only what is missing on a repeat run, and serves read and regex-search as repeatable queries over that cache \u2014 so a suspect hit can be followed by a narrower read or a deeper dive without re-hitting Discord",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h25",
+      "kind": "honesty",
+      "text": "every clause of the after-state is separately demonstrable \u2014 paging past 100, fetching only the gap on a repeat run, and answering a follow-up query from cache without a Discord request",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c19",
+      "kind": "why_it_matters",
+      "text": "this is the missing half of the agent's stated purpose: CLAUDE.md says the agent can read the Discord today but does not yet index sources or answer questions, and every indexing or answering path downstream needs message bodies over an arbitrary window as its input",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h26",
+      "kind": "honesty",
+      "text": "CLAUDE.md's description of the agent is updated in the same change, so the repo stops describing a read capability it has outgrown without yet claiming indexing or answering it still does not do",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c20",
+      "kind": "success_signal",
+      "text": "a maintainer can name a public channel and a pattern and get back matching messages from outside the last 100 \u2014 the concrete case that motivated this, September content in a channel whose recent 100 messages span March to February, returns results instead of nothing",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h27",
+      "kind": "honesty",
+      "text": "the motivating case is run end to end and recorded: a channel whose recent 100 messages stop short of September returns September matches after a fetch",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c21",
+      "kind": "requirement",
+      "text": "fetch and repeat-read is the primary capability; search is the narrow case: the working loop is fetch a window, search it, get a suspect hit, then dive in with a follow-up read or search \u2014 so the design centres on a durable local copy that can be queried repeatedly, not on a one-shot search that returns and forgets",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h8",
+      "kind": "honesty",
+      "text": "a second query against an already-fetched window returns results without issuing any Discord request at all",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c22",
+      "kind": "requirement",
+      "text": "a repeat fetch downloads only what is missing: with a window already in hand, the fetcher reconciles against what is cached and requests only the gap, which is also what makes the cache a backup rather than a throwaway scratch file",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h9",
+      "kind": "honesty",
+      "text": "re-running a fetch over a window already cached requests only the gap, demonstrably \u2014 the request count on the second run is a fraction of the first, not equal to it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h14",
+      "kind": "honesty",
+      "text": "the cache records what window it holds per channel, so 'what is missing' is computed from stored state rather than re-derived by scanning Discord",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c24",
+      "kind": "requirement",
+      "text": "the dependency convention is expressed as an approved-dependencies list rather than a zero-dependency rule with exceptions: CLAUDE.md's Conventions section names the approved set \u2014 discord-bot-cli (already in, via the optional [discord] extra) and now pymongo for the Mongo cache \u2014 and keeps its governing force, that anything outside that list is a deliberate decision to discuss rather than a quiet addition",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h22",
+      "kind": "honesty",
+      "text": "CLAUDE.md's Conventions section reads as an approved-dependencies list naming discord-bot-cli and pymongo, with the 'deliberate decision to discuss' rule still governing anything outside it \u2014 supersedes h10, h13 and h19, all three of which should be rejected",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c25",
+      "kind": "requirement",
+      "text": "jlab owns its own MongoDB instance (jlab-mongodb) and touches no other: the eidetic memory store on 27018 that this agent reads and writes via /remember and /recall stays untouched, and qq-mongodb on 27017 is a legacy instance jlab must not write to \u2014 separation is by instance, not merely by database name",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h20",
+      "kind": "honesty",
+      "text": "jlab connects only to its own instance: no code path, default, or fallback points at 27017 or 27018, and a test or doctor check asserts it \u2014 supersedes h11, which assumed colocation and should be rejected",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c29",
+      "kind": "requirement",
+      "text": "standing up jlab-mongodb is part of this feature's cost, not a free precondition: the earlier rationale for MongoDB was that an instance already existed so none had to be raised, and choosing a dedicated instance reverses that \u2014 the feature now owns a container to run, a port to pick, and an operator setup step to document, plus a doctor check that reports clearly when the instance is absent or unreachable",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h21",
+      "kind": "honesty",
+      "text": "a run against an absent or unreachable jlab-mongodb fails with a code-2 environment error carrying an actionable hint, never a traceback and never a silent empty result",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c30",
+      "kind": "requirement",
+      "text": "a single oldest/newest coverage pair cannot represent disjoint fetches and will silently over-claim: the recorded instruction on the incremental-fetch requirement says to track 'oldest and newest message id or timestamp fetched', but fetching September and later fetching January produces two disjoint spans that a single pair reports as one continuous window \u2014 a subsequent search would then answer from a cache it believes complete while months in the middle were never downloaded, defeating the gap-only obligation rather than fulfilling it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h41",
+      "kind": "honesty",
+      "text": "a fetch of two disjoint windows leaves two intervals, not one spanning pair, and a search across the gap between them names the uncovered span rather than answering as if it were complete",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c31",
+      "kind": "requirement",
+      "text": "the public-only invariant is enforced at fetch time but the cache outlives it: the boundary claim gates _channel_public before any history() call, which is correct for a live read that returns and forgets \u2014 but a cached corpus keeps serving a channel's contents after the guild makes that channel private or role-gates it, so a permission change that should hide content silently fails to, and the longer the cache lives the wider the gap",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h42",
+      "kind": "honesty",
+      "text": "a channel that goes private has its cached content purged by the next sweep, asserted by a test that flips a fake channel's visibility and then finds nothing for it in the cache",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c32",
+      "kind": "requirement",
+      "text": "the cache has no deletion or expiry story and the frame never raised one: it stores complete message bodies of identifiable community members indefinitely, with no pruning, no honouring of messages the author later deleted or edited on Discord, and no way to remove one person's content on request \u2014 the members path avoided this entirely by keeping only counts, and the links path by keeping only URLs, so this is the first jlab surface where the question can even arise",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h43",
+      "kind": "honesty",
+      "text": "deletion is exercised end to end: content is fetched, a purge is run for one author, and a subsequent search returns nothing for them from either the cache or a derived report",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c33",
+      "kind": "requirement",
+      "text": "the read-compatibility promise is restated, not abandoned: read serves from the Mongo cache with --refresh forcing a live re-read, so 'byte-identical to today for a caller passing no new flag' holds once the channel's window is covered, and the cold-cache case \u2014 a channel never fetched \u2014 must announce that the window is uncovered rather than returning an empty result that reads as 'no messages'",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h44",
+      "kind": "honesty",
+      "text": "read on a covered window matches today's output, and read on an uncovered window reports the gap and points at --refresh instead of returning empty",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c34",
+      "kind": "requirement",
+      "text": "jlab-mongodb's network posture is a stated, approved decision rather than an oversight: both mongo containers measured on this machine bind 0.0.0.0 (qq-mongodb 27017, eidetic-mongo 27018), and jlab-mongodb following that pattern is accepted because the exposure is confined to an internal network \u2014 what this claim requires is that the posture is written down as a choice, so a later move to a less trusted network is recognised as changing it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h33",
+      "kind": "honesty",
+      "text": "the internal-network assumption is stated where the container setup is documented, so deploying jlab-mongodb anywhere less trusted is visibly a change of posture rather than a silent inheritance \u2014 supersedes h28, which demanded loopback-only and auth, and should be rejected",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c36",
+      "kind": "requirement",
+      "text": "nothing serialises two fetches against the same channel: the frame's only concurrency control is the asyncio semaphore bounding per-channel fan-out inside one invocation, but the cache is now shared state across invocations, and this agent runs in a mesh where more than one session can invoke the CLI \u2014 two overlapping fetches can interleave writes and leave a coverage record claiming a span neither actually completed, which is the same silent over-claim as the disjoint-interval gap but arriving by a different route",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h30",
+      "kind": "honesty",
+      "text": "coverage is only widened after the messages in that span are durably written, so an interrupted or interleaved run leaves coverage narrower than reality rather than wider \u2014 under-claiming is safe, over-claiming is not",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c37",
+      "kind": "requirement",
+      "text": "a caller-supplied regex over a large corpus is an availability hazard with no guard: the compile-time validation catches malformed patterns, but a well-formed pattern with catastrophic backtracking will hang, and Python's re offers no timeout \u2014 the existing verbs never took a pattern from the user, so this risk is new with this feature",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h31",
+      "kind": "honesty",
+      "text": "a pathological pattern is bounded rather than allowed to hang indefinitely, and the bound is reported as a diagnostic rather than as an empty result",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c38",
+      "kind": "requirement",
+      "text": "coverage is load-bearing state with no way to inspect it: every incremental-fetch guarantee depends on the per-channel coverage record, and the only planned visibility is a doctor reachability check \u2014 an operator cannot ask what the cache actually holds, so a wrong coverage record is undetectable until a search quietly returns too little",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h32",
+      "kind": "honesty",
+      "text": "coverage is inspectable from the CLI, so 'what does the cache hold for this channel' is answerable without opening Mongo by hand",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c40",
+      "kind": "requirement",
+      "text": "a per-user deletion mechanism is required, not optional: Discord's Developer Terms require API Data to be deleted when the applicable user requests deletion, when Discord requests deletion, or when retaining it is no longer necessary for the stated functionality \u2014 so the cache needs a way to purge one author's content, a way to honour a platform request, and a retention bound tied to what the feature actually needs",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h34",
+      "kind": "honesty",
+      "text": "purging one author's content is a real, runnable command with a test, not a documented manual Mongo query \u2014 and it removes that author from the cache and from any derived report, not only from the primary collection",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c41",
+      "kind": "requirement",
+      "text": "the cache must be encrypted at rest: Discord's Developer Terms require it specifically, and this is the first jlab surface that stores API Data at all \u2014 the members path kept only derived integers and the links path only URLs, so no existing jlab store had to meet this bar",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h35",
+      "kind": "honesty",
+      "text": "encryption at rest is verified as actually on for the jlab-mongodb deployment, not assumed from the image default \u2014 doctor reports it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c42",
+      "kind": "requirement",
+      "text": "the agent needs a privacy policy describing collection, storage, retention, sharing and deletion, with an up-to-date link in the Discord Developer Portal; this is satisfiable by a static Markdown or GitHub page and does not make the software a web service",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h36",
+      "kind": "honesty",
+      "text": "the policy's Developer Portal link is present and current, and the policy text describes what this cache actually does rather than a generic statement",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c43",
+      "kind": "requirement",
+      "text": "the jetson-bot documents were rewritten on 2026-09-12 and now carry the obligations this cache creates: PRIVACY_POLICY.md names message content, metadata, user identifiers and attachments as processed data, ties retention to stated functionality, lists deletion on user request / Discord request / end of functionality, commits to removing backups and derived indexes, and states encryption at rest where required \u2014 and the earlier conflict is explicitly reversed, with both documents now stating Discord data is not freely redistributable (PRIVACY_POLICY.md 'Sharing and Sale of Data'; TERMS_OF_SERVICE.md:25,48); what remains is that jlab's code must actually deliver the deletion the policy now promises",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h45",
+      "kind": "honesty",
+      "text": "the published policy and the shipped behaviour agree: every deletion, retention and encryption commitment the policy makes is one the code can actually perform, and any it cannot is corrected in the policy rather than left as an unbacked promise",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c45",
+      "kind": "boundary",
+      "text": "private channels are not covered: the cache holds public channels only, and nothing in this feature fetches, stores, or serves a private or role-gated channel",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h39",
+      "kind": "honesty",
+      "text": "no private or role-gated channel is ever fetched, stored, or served, and the daily sweep purges anything that becomes private \u2014 so the cache's contents match the guild's current public surface rather than its surface at capture time",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c46",
+      "kind": "requirement",
+      "text": "a periodic background reconciliation is a required part of this feature, not an optional extra: roughly once a day the cache re-checks channel visibility and removes anything now private, applies edits so the latest version of a message is what is stored, and removes messages deleted on Discord \u2014 this is simultaneously how a community member controls their own data and how the bot complies with Discord's deletion obligations",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h40",
+      "kind": "honesty",
+      "text": "a full reconciliation cycle is demonstrable end to end: a message edited on Discord is updated in the cache, a deleted one is removed, and a channel made private has its content purged \u2014 each asserted by a test, not just described",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "c48",
+      "kind": "requirement",
+      "text": "events cannot replace the periodic sweep, only reduce its load: a gateway delivers MESSAGE_DELETE and MESSAGE_UPDATE only to a client that is connected when they happen, so anything occurring while the daemon is down, restarting, or disconnected is lost with no backfill \u2014 and Discord does not replay them \u2014 which means the daily reconciliation stays the correctness backstop and events become a latency improvement on top of it",
+      "deferred": false,
+      "deferred_reason": ""
+    },
+    {
+      "id": "h37",
+      "kind": "honesty",
+      "text": "the cache converges to Discord's current state even if the event listener never runs at all, so events are an optimisation whose failure degrades freshness rather than correctness",
+      "deferred": false,
+      "deferred_reason": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "summary": "Approved-dependency allowlist: add pymongo, rewrite CLAUDE.md's dependency convention as an approved list, and enforce it with a test",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "pyproject.toml lists pymongo; CLAUDE.md's Conventions bullet reads as an approved-dependencies list naming discord-bot-cli and pymongo, keeping the 'deliberate decision to discuss' rule",
+        "a test reads project.dependencies and optional-dependencies and FAILS when any distribution is absent from the allowlist (obligation o1) \u2014 verified by a test that adds a fake dep and asserts the failure",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o1)"
+      ],
+      "deps": [],
+      "covers": [
+        "c24",
+        "h22"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t2",
+      "summary": "jlab-mongodb deployment: dedicated instance, URI from config, doctor reachability and instance-identity check",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "connection URI is read from an env var with no baked-in host/port default; no code path, default, fallback or test fixture resolves to 27017 or 27018, asserted by a test (o4)",
+        "an absent or unreachable cache exits code 2 with an actionable hint, never a traceback and never a silent empty result (o10)",
+        "the documented setup records the bind address and the internal-network assumption it rests on (o14)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o4, o10, o14)"
+      ],
+      "deps": [],
+      "covers": [
+        "c25",
+        "h20",
+        "c29",
+        "h21",
+        "c34",
+        "h33"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t3",
+      "summary": "Backward cursor: thread before= through _history/_drain/_collect_history alongside after=",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a fake channel deeper than one 100-message page pages backwards to completion, proving the loop advances rather than re-fetching the same page",
+        "the overshoot-and-drop cap and the rate-limit resume behaviour are preserved unchanged for the existing after= direction",
+        "a full drain completes inside one action coroutine per invocation",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions"
+      ],
+      "deps": [],
+      "covers": [
+        "c3",
+        "h2",
+        "c10",
+        "h4"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t4",
+      "summary": "Lift the 100-message bound in read_messages and extend rate-limit handling to the backward drain",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "the 1..100 validation at _discord.py:422 and the single unwindowed channel.history call at :431 are replaced by a call into the paging primitive",
+        "a simulated 429 mid-drain is retried with clamped backoff and resumed from its cursor; the result reports whether the window was fully read rather than silently truncating (o5)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o5)"
+      ],
+      "deps": [
+        "t3"
+      ],
+      "covers": [
+        "c2",
+        "h38",
+        "c15",
+        "h7"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t5",
+      "summary": "Mongo cache layer: message documents with created/updated/stored timestamps, application-level encrypt-on-store and decrypt-on-fetch",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "message content is encrypted on store and decrypted on fetch at the application layer, so encryption does not depend on the MongoDB edition's storage engine; doctor reports it as measured, not assumed (o16)",
+        "each cached message carries created, updated and stored timestamps",
+        "full message bodies are retained by decision and CLAUDE.md states this beside the members no-content rule and the links URL-only rule (o8)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o8, o16)"
+      ],
+      "deps": [
+        "t2"
+      ],
+      "covers": [
+        "c41",
+        "h35",
+        "c11",
+        "h5"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t6",
+      "summary": "Interval-based coverage: merged intervals per channel, gap arithmetic, and write-before-widen ordering",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "coverage is a merged list of intervals per channel, not a single oldest/newest pair; a test fetches two disjoint spans and asserts the gap between them is named, not swallowed (o18)",
+        "a repeat fetch over a covered window issues strictly fewer requests than the first run, asserted by request count (o6)",
+        "coverage widens only after the messages in that span are durably written, and concurrent fetches against one channel are serialised via an advisory lock held outside the guarded directory (o12)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o6, o12, o18)"
+      ],
+      "deps": [
+        "t5"
+      ],
+      "covers": [
+        "c22",
+        "h9",
+        "h14",
+        "c30",
+        "h41",
+        "c36",
+        "h30"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t7",
+      "summary": "discord fetch verb: backward paged fetch of a public channel into the cache, public check re-applied per caller-supplied id",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a non-public channel id is refused with a code-1 error before any history request is issued; its name and contents never reach output or cache (o3)",
+        "_channel_public is the single source of the public test, applied at fetch time and on every sweep, so the definition cannot drift between paths",
+        "a second query against an already-fetched window returns results with the Discord seam monkeypatched to raise on any call (o7)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o3, o7)"
+      ],
+      "deps": [
+        "t4",
+        "t6"
+      ],
+      "covers": [
+        "c21",
+        "h8",
+        "c8",
+        "h16",
+        "c45",
+        "h39"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t8",
+      "summary": "discord search verb: regex over the cached corpus with a declared execution bound",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a malformed --grep pattern is compiled up front and exits 1 with error:/hint: before any Discord request; no traceback",
+        "a pathological backtracking pattern terminates within a declared bound and reports being bounded, never hanging and never returning an empty result that reads as no matches (o13)",
+        "a search over a partially covered window reports the uncovered spans rather than answering as if complete (o18)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o13, o18)"
+      ],
+      "deps": [
+        "t7"
+      ],
+      "covers": [
+        "c5",
+        "h3",
+        "c37",
+        "h31"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t9",
+      "summary": "discord read served from cache with --refresh as the only live path",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "read on a covered window returns the same messages as today; on an uncovered window it reports the gap and points at --refresh rather than returning empty (o21)",
+        "--refresh is the only path by which read contacts Discord, so a caller can tell from the command alone whether the network was touched (o22)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o21, o22; note o11 is superseded by o21 and is not dischargeable as written)"
+      ],
+      "deps": [
+        "t7"
+      ],
+      "covers": [
+        "c33",
+        "h44"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t10",
+      "summary": "Coverage inspection: make what the cache holds answerable from the CLI",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "an operator can ask what windows the cache holds for a channel without opening Mongo by hand, in text and --json",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions"
+      ],
+      "deps": [
+        "t6"
+      ],
+      "covers": [
+        "c38",
+        "h32"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t11",
+      "summary": "Daily reconciliation sweep: apply edits, remove deletions, purge channels that became private",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a full cycle is demonstrable: a message edited on Discord is updated in the cache, a deleted one removed, and a channel made private has its content purged \u2014 each asserted by a test",
+        "the cache converges to Discord's current state using only the sweep, with no gateway connection anywhere in the test (o19)",
+        "a rate-limit encounter delays the sweep rather than narrowing what it reconciles; an incomplete sweep reports itself as incomplete (o20)",
+        "the sweep is a single idempotent pass driven by cron or a systemd timer; no scheduler is built into jlab",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o19, o20)"
+      ],
+      "deps": [
+        "t7"
+      ],
+      "covers": [
+        "c46",
+        "h40",
+        "c31",
+        "h42",
+        "c48",
+        "h37"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t12",
+      "summary": "Per-user deletion: purge one author's content from cache and derived reports",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a purge by author id removes that author's messages from the cache AND from derived reports, verified by fetch, purge, then search finding nothing for them (o15)",
+        "deletion is a real runnable CLI verb taking an author id or channel id, not a documented manual Mongo query",
+        "retention is explicit: content is bounded by what the stated functionality needs rather than kept indefinitely",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o15)"
+      ],
+      "deps": [
+        "t5"
+      ],
+      "covers": [
+        "c32",
+        "h43",
+        "c40",
+        "h34"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t13",
+      "summary": "Privacy policy alignment: make the published commitments match what the code can actually do",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "every deletion, retention and encryption commitment the published policy makes is one the shipped code can perform; anything it cannot is corrected in the policy rather than left as an unbacked promise (o17)",
+        "the policy describes collection, storage, retention, sharing and deletion for THIS cache specifically, and the Developer Portal link resolves to it",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o17)"
+      ],
+      "deps": [
+        "t12"
+      ],
+      "covers": [
+        "c42",
+        "h36",
+        "c43",
+        "h45"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t14",
+      "summary": "CLI contract: explain catalog entries and rubric compliance for the new verbs",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "every new verb path resolves through explain, and the parser-walking test at tests/test_cli.py:127-164 passes without being amended to excuse it",
+        "results on stdout, diagnostics on stderr, --json everywhere, errors as error:/hint: or {code,message,remediation} with no traceback; teken cli doctor . --strict passes unchanged in CI (o9)",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o9)"
+      ],
+      "deps": [
+        "t9",
+        "t11",
+        "t12"
+      ],
+      "covers": [
+        "c13",
+        "h6",
+        "c12",
+        "h18"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t15",
+      "summary": "Invariant guards: read-only surface and no edits to the sibling repo",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "a test asserts the adapter surface contains no send/post/react/edit/delete/create_thread call, so read-only stays literally true as the seam grows (o2)",
+        "the change set touches no file in the sibling discord-bot-cli repository; anything missing upstream is worked around locally and marked, as the existing WORKAROUND(discord-bot-cli#14) serializer is",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions (o2)"
+      ],
+      "deps": [
+        "t7"
+      ],
+      "covers": [
+        "c9",
+        "h17",
+        "c7",
+        "h46"
+      ],
+      "instruction": ""
+    },
+    {
+      "id": "t16",
+      "summary": "Documentation: README, CLAUDE.md agent description and the end-to-end motivating case",
+      "origin": "llm",
+      "status": "confirmed",
+      "acceptance_criteria": [
+        "the motivating case runs end to end and is recorded: a channel whose recent 100 messages stop short of September returns September matches after a fetch",
+        "CLAUDE.md's description of the agent is updated so the repo stops describing a read capability it has outgrown, without claiming the indexing and answering it still does not do",
+        "output is usable by both audiences without a second tool: a maintainer reads the report, the agent consumes the same run via --json",
+        "changes reviewed by: pi --provider nemotron --model associate \u2014 the review prompt must include this task's obligations verbatim as the review instructions"
+      ],
+      "deps": [
+        "t14"
+      ],
+      "covers": [
+        "c1",
+        "h12",
+        "c16",
+        "h23",
+        "c17",
+        "h24",
+        "c18",
+        "h25",
+        "c19",
+        "h26",
+        "c20",
+        "h27"
+      ],
+      "instruction": ""
+    }
+  ],
+  "risks": [
+    {
+      "id": "r1",
+      "text": "file-disjointness violation in the verb layer: t7, t8, t9, t10, t11 and t12 each register a verb in jlab/cli/_commands/discord.py, so waves 4 and 5 are formally parallel but serialised at merge \u2014 the dependency graph sequences content, not file writes, and the CLI does not check this. Either give the verb tasks explicit deps to serialise them, or have the merging agent land them one at a time in wave order",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r2",
+      "text": "t3 and t4 both rewrite jlab/cli/_discord.py's paging internals; t4 now depends on t3 to force sequential merge rather than leaving them same-wave",
+      "kind": "follow_up",
+      "task_id": "t4",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r3",
+      "text": "the associate-model review criterion on every task assumes pi --provider nemotron --model associate stays reachable at its configured endpoint; the endpoint answered 401 (reachable, authenticating) at plan time but is a local network dependency outside this repo's control",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r4",
+      "text": "c35 (forums and threads excluded from the corpus) remains an unconfirmed assumption on the frame and is therefore not a coverage target \u2014 no task covers it, so the coverage-reporting mitigation h29 is carried by t8's gap-reporting criterion rather than by a dedicated task",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    }
+  ],
+  "obligations": []
+}
