@@ -48,7 +48,9 @@ record one neither run completed. Every coverage mutation takes a per-channel
   channel they name;
 * nested acquisition in one process is re-entrant, so :func:`fetch_missing`
   can hold the lock for the whole run while :func:`widen_coverage` takes it
-  again per span.
+  again per span Re-entrancy is per *process*: two threads in one
+  process share the lock rather than queueing behind each other, exactly as
+  in the headspace precedent. The CLI is single-threaded per invocation.
 
 The honest scope limit: ``flock`` serialises processes **on one host**. Two
 machines writing to one jlab-mongodb are not serialised by it. jlab-mongodb is
@@ -413,8 +415,11 @@ def describe(
 # Incremental fetch — request only the gaps, write before widening
 # ---------------------------------------------------------------------------
 
-#: ``fetch(span) -> messages`` — issues the Discord requests for one span.
-Fetcher = Callable[[Interval], Sequence[dict]]
+#: ``fetch(span) -> (messages, complete, reason)`` — issues the Discord
+#: requests for one span. The same shape
+#: :func:`jlab.cli._discord._collect_history` returns: *complete* is ``False``
+#: when the span could not be fully drained (rate limit, cap, part-way failure).
+Fetcher = Callable[[Interval], tuple[Sequence[dict], bool, "str | None"]]
 #: ``store(span, messages)`` — durably writes one span's messages.
 Storer = Callable[[Interval, Sequence[dict]], Any]
 
@@ -428,6 +433,39 @@ def _default_store(channel: str) -> Storer:
     return store
 
 
+def _unpack(result: Any, span: Interval) -> tuple[list[dict], bool, str | None]:
+    """Insist the fetcher says whether it finished — a bare list proves nothing."""
+    if not (isinstance(result, tuple) and len(result) == 3 and isinstance(result[1], bool)):
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=(
+                f"the fetch for {span.start.isoformat()}..{span.end.isoformat()} did not "
+                "report whether the span was fully drained; refusing to record coverage"
+            ),
+            remediation=(
+                "return (messages, complete, reason) from the fetcher, as " "_collect_history does"
+            ),
+        )
+    messages, complete, reason = result
+    return list(messages), complete, reason
+
+
+def clear_coverage(channel_id: Any, *, collection: Any = None) -> None:
+    """Forget every interval recorded for *channel_id*, under its lock.
+
+    A purge that removes a channel's messages must call this too; coverage that
+    outlives the messages it describes is exactly the over-claim this module
+    exists to prevent.
+    """
+    channel = _validate_channel_id(channel_id)
+
+    def action(col: Any) -> None:
+        with channel_lock(channel):
+            col.delete_one({"_id": channel})
+
+    _run_with(collection, action)
+
+
 def fetch_missing(
     channel_id: Any,
     window: Interval,
@@ -435,15 +473,24 @@ def fetch_missing(
     fetch: Fetcher,
     store: Storer | None = None,
     collection: Any = None,
+    now: dt.datetime | None = None,
+    blocking: bool = True,
 ) -> dict[str, Any]:
     """Fetch only the uncovered parts of *window*, storing each before widening.
 
     Holds the channel lock for the whole run, so a concurrent fetch of the same
-    channel waits rather than interleaving. For each gap, in order: *fetch* it,
-    *store* the messages, then widen coverage by that gap. An exception from
-    either leaves the spans already completed recorded and the failing span
-    unrecorded — coverage ends narrower than reality, never wider — and is
-    re-raised.
+    channel waits (or, with ``blocking=False``, raises) rather than
+    interleaving. For each gap, in order: *fetch* it, *store* what came back,
+    and only if the fetcher reports the span **complete**, widen coverage by
+    it. Three things keep coverage from ever being wider than reality:
+
+    * an exception from *fetch* or *store* leaves completed spans recorded and
+      the failing span unrecorded, and is re-raised;
+    * an incomplete span is stored but not widened — it is listed under
+      ``incomplete`` with the fetcher's reason, and the next run retries it;
+    * no span is claimed past *now* (the moment this run started): a window
+      reaching into the future is fetched and recorded only up to *now*, so a
+      message posted later is a gap, not a silent omission.
 
     ``fetch_calls`` in the result counts the *fetch* calls issued — one per
     uncovered gap, none for an already-covered window. It is not a Discord
@@ -451,27 +498,38 @@ def fetch_missing(
     """
     channel = _validate_channel_id(channel_id)
     writer = store if store is not None else _default_store(channel)
+    started = now or dt.datetime.now(UTC)
 
     def action(col: Any) -> dict[str, Any]:
-        with channel_lock(channel):
+        with channel_lock(channel, blocking=blocking):
             before = _read(col, channel)
-            gaps = subtract(window, before)
+            gaps = [
+                Interval(g.start, min(g.end, started))
+                for g in subtract(window, before)
+                if g.start < started
+            ]
             already = intersect(window, before)
             stored = 0
+            incomplete: list[dict[str, Any]] = []
             for gap in gaps:
-                messages = list(fetch(gap))
+                messages, complete, reason = _unpack(fetch(gap), gap)
                 writer(gap, messages)
                 stored += len(messages)
-                widen_coverage(channel, gap, collection=col)
+                if complete:
+                    widen_coverage(channel, gap, collection=col)
+                else:
+                    incomplete.append({**gap.to_dict(), "reason": reason})
             after = _read(col, channel)
             return {
                 "channel_id": channel,
                 "window": window.to_dict(),
                 "fetched": [g.to_dict() for g in gaps],
                 "already_covered": [i.to_dict() for i in already],
+                "incomplete": incomplete,
                 "fetch_calls": len(gaps),
                 "stored": stored,
                 "coverage": [i.to_dict() for i in after],
+                "uncovered": [g.to_dict() for g in subtract(window, after)],
                 "complete": not subtract(window, after),
             }
 

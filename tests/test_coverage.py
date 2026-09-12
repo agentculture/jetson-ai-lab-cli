@@ -107,11 +107,12 @@ class _RecordingFetcher:
         self.requests = 0
         self._per_day = per_day
 
-    def __call__(self, span: _coverage.Interval) -> list[dict]:
+    def __call__(self, span: _coverage.Interval) -> tuple[list[dict], bool, str | None]:
         self.spans.append((span.start, span.end))
         days = max(1, round((span.end - span.start).total_seconds() / 86400))
         self.requests += days * self._per_day
-        return [{"id": f"m-{len(self.spans)}-{i}"} for i in range(days)]
+        # Same (messages, complete, reason) shape _collect_history returns.
+        return [{"id": f"m-{len(self.spans)}-{i}"} for i in range(days)], True, None
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +439,7 @@ def test_coverage_widens_only_after_the_messages_are_written(
 
     def fetch(span):
         order.append("fetch")
-        return [{"id": "m1"}]
+        return [{"id": "m1"}], True, None
 
     def store(span, messages):
         order.append("store")
@@ -602,7 +603,7 @@ def test_fetch_holds_the_lock_for_the_whole_run(col: _FakeCollection, lock_home)
                 observed.append(True)
         finally:
             os.close(fd)
-        return []
+        return [], True, None
 
     _coverage.fetch_missing(
         "chan-1", _iv(_at(2026, 1), _at(2026, 2)), fetch=fetch, store=_noop, collection=col
@@ -643,3 +644,155 @@ def test_coverage_module_opens_no_mongo_client_of_its_own() -> None:
     source = pathlib.Path(_coverage.__file__).read_text(encoding="utf-8")
     assert "MongoClient" not in source
     assert "JLAB_MONGO_URI" not in source
+
+
+# ---------------------------------------------------------------------------
+# Over-claim paths beyond the obvious ones
+# ---------------------------------------------------------------------------
+
+
+def test_an_incomplete_span_is_stored_but_not_claimed_as_covered(
+    col: _FakeCollection, lock_home
+) -> None:
+    """A rate-limited, part-read drain must not widen coverage over the gap.
+
+    What was read is still stored (it is real data), but the span is reported
+    as incomplete and stays uncovered, so the next run fetches it again.
+    """
+    stored: list[dict] = []
+
+    def fetch(span):
+        return [{"id": "m1"}], False, "rate limited: retries exhausted"
+
+    result = _coverage.fetch_missing(
+        "chan-1",
+        _iv(_at(2026, 1), _at(2026, 2)),
+        fetch=fetch,
+        store=lambda span, messages: stored.extend(messages),
+        collection=col,
+    )
+    assert stored == [{"id": "m1"}]
+    assert _coverage.read_coverage("chan-1", collection=col) == []
+    assert result["complete"] is False
+    assert result["incomplete"] == [
+        {
+            "start": _at(2026, 1).isoformat(),
+            "end": _at(2026, 2).isoformat(),
+            "reason": "rate limited: retries exhausted",
+        }
+    ]
+
+
+def test_a_fetch_that_does_not_say_whether_it_finished_is_refused(
+    col: _FakeCollection, lock_home
+) -> None:
+    """A bare message list cannot prove the span was drained; refuse it."""
+    stored: list[dict] = []
+    with pytest.raises(CliError) as excinfo:
+        _coverage.fetch_missing(
+            "chan-1",
+            _iv(_at(2026, 1), _at(2026, 2)),
+            fetch=lambda span: [{"id": "m1"}],
+            store=lambda span, messages: stored.extend(messages),
+            collection=col,
+        )
+    assert excinfo.value.code == EXIT_ENV_ERROR
+    assert _coverage.read_coverage("chan-1", collection=col) == []
+
+
+def test_coverage_never_extends_past_when_the_fetch_started(
+    col: _FakeCollection, lock_home
+) -> None:
+    """A window reaching into the future must not claim the future as read.
+
+    Otherwise a message posted after the fetch, inside the window, would be
+    silently absent from every later search.
+    """
+    started = _at(2026, 9, 12)
+    fetch = _RecordingFetcher()
+    window = _iv(_at(2026, 9, 1), _at(2026, 10, 1))
+
+    _coverage.fetch_missing("chan-1", window, fetch=fetch, store=_noop, collection=col, now=started)
+
+    assert fetch.spans == [(_at(2026, 9, 1), started)]
+    got = _coverage.read_coverage("chan-1", collection=col)
+    assert [(i.start, i.end) for i in got] == [(_at(2026, 9, 1), started)]
+    report = _coverage.describe("chan-1", window, collection=col)
+    assert [(g["start"], g["end"]) for g in report["uncovered"]] == [
+        (started.isoformat(), _at(2026, 10, 1).isoformat())
+    ]
+
+
+def test_a_window_wholly_in_the_future_fetches_nothing_and_claims_nothing(
+    col: _FakeCollection, lock_home
+) -> None:
+    fetch = _RecordingFetcher()
+    result = _coverage.fetch_missing(
+        "chan-1",
+        _iv(_at(2027, 1), _at(2027, 2)),
+        fetch=fetch,
+        store=_noop,
+        collection=col,
+        now=_at(2026, 9, 12),
+    )
+    assert fetch.spans == []
+    assert result["complete"] is False
+    assert _coverage.read_coverage("chan-1", collection=col) == []
+
+
+def test_clear_coverage_drops_every_interval_under_the_lock(
+    col: _FakeCollection, lock_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A channel purge must take its coverage with it, or coverage over-claims."""
+    _coverage.widen_coverage("chan-1", _iv(_at(2025, 9), _at(2025, 10)), collection=col)
+    _coverage.widen_coverage("chan-1", _iv(_at(2026, 1), _at(2026, 2)), collection=col)
+    taken: list[str] = []
+    original = _coverage.channel_lock
+
+    @contextlib.contextmanager
+    def spy(channel_id, **kwargs):
+        taken.append(channel_id)
+        with original(channel_id, **kwargs):
+            yield
+
+    monkeypatch.setattr(_coverage, "channel_lock", spy)
+    _coverage.clear_coverage("chan-1", collection=col)
+    assert _coverage.read_coverage("chan-1", collection=col) == []
+    assert taken == ["chan-1"]
+
+
+def test_non_blocking_fetch_on_a_busy_channel_raises_before_fetching(
+    col: _FakeCollection, lock_home
+) -> None:
+    fetch = _RecordingFetcher()
+    _coverage.lock_path("chan-1").parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(_coverage.lock_path("chan-1"), os.O_RDWR | os.O_CREAT, 0o600)
+    result: dict = {}
+
+    def other_process_holds() -> None:
+        # A different open file description, as a second process would have.
+        try:
+            with pytest.raises(CliError) as excinfo:
+                _coverage.fetch_missing(
+                    "chan-1",
+                    _iv(_at(2026, 1), _at(2026, 2)),
+                    fetch=fetch,
+                    store=_noop,
+                    collection=col,
+                    blocking=False,
+                )
+            result["code"] = excinfo.value.code
+        except BaseException as exc:  # surfaced below
+            result["error"] = exc
+
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        thread = threading.Thread(target=other_process_holds)
+        thread.start()
+        thread.join(5)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert "error" not in result, result.get("error")
+    assert result["code"] == EXIT_ENV_ERROR
+    assert fetch.spans == []
