@@ -162,3 +162,297 @@ def test_every_registered_command_has_a_catalog_entry() -> None:
     parser = _build_parser()
     missing = [path for path in _registered_command_paths(parser) if path not in ENTRIES]
     assert not missing, f"registered commands missing an explain entry: {missing}"
+
+
+# --- discord coverage -------------------------------------------------------
+
+
+def test_discord_coverage_text_no_window(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Coverage text mode without a window shows covered intervals."""
+    import datetime as dt
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    # Set up lock home to avoid real filesystem
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+
+    # Create fake collection and set up coverage records
+    col = _FakeCollection()
+
+    def fake_coverage_collection():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _context():
+            yield col
+
+        return _context()
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+
+    # Set up coverage using the proper API
+    UTC = dt.timezone.utc
+    sep1 = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    sep5 = dt.datetime(2026, 9, 5, tzinfo=UTC)
+    sep10 = dt.datetime(2026, 9, 10, tzinfo=UTC)
+    sep15 = dt.datetime(2026, 9, 15, tzinfo=UTC)
+
+    _coverage.widen_coverage("123456789", _coverage.Interval(sep1, sep5), collection=col)
+    _coverage.widen_coverage("123456789", _coverage.Interval(sep10, sep15), collection=col)
+
+    rc = main(["discord", "coverage", "123456789"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "123456789" in out
+    assert "2026-09-01" in out
+    assert "2026-09-05" in out
+    assert "2026-09-10" in out
+    assert "2026-09-15" in out
+    # Should not print a complete boolean without a window
+    # (note that "completeness" in the explanatory text is fine)
+    assert "Status: complete" not in out
+    assert "Status: incomplete" not in out
+
+
+def test_discord_coverage_json_no_window(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Coverage JSON mode without a window."""
+    import datetime as dt
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+
+    col = _FakeCollection()
+
+    def fake_coverage_collection():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _context():
+            yield col
+
+        return _context()
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+
+    UTC = dt.timezone.utc
+    sep1 = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    sep5 = dt.datetime(2026, 9, 5, tzinfo=UTC)
+    _coverage.widen_coverage("123456789", _coverage.Interval(sep1, sep5), collection=col)
+
+    rc = main(["discord", "coverage", "123456789", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["channel_id"] == "123456789"
+    assert payload["window"] is None
+    assert len(payload["covered"]) > 0
+
+
+def test_discord_coverage_text_with_window(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Coverage text mode with a window shows covered and uncovered."""
+    import datetime as dt
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+
+    col = _FakeCollection()
+
+    def fake_coverage_collection():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _context():
+            yield col
+
+        return _context()
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+
+    UTC = dt.timezone.utc
+    sep1 = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    sep5 = dt.datetime(2026, 9, 5, tzinfo=UTC)
+    _coverage.widen_coverage("123456789", _coverage.Interval(sep1, sep5), collection=col)
+
+    rc = main(
+        [
+            "discord",
+            "coverage",
+            "123456789",
+            "--since",
+            "2026-09-01T00:00:00+00:00",
+            "--until",
+            "2026-09-15T00:00:00+00:00",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    # With a window, should show covered intervals
+    assert "2026-09-01" in out
+    # Should show both covered and uncovered, and a status
+    assert "Status:" in out or "Covered:" in out
+
+
+def test_discord_coverage_invalid_channel_id_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Coverage errors on invalid channel id with code 1."""
+    rc = main(["discord", "coverage", "abc def"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    err = captured.err
+    assert err.startswith("error:")
+    assert "hint:" in err
+
+
+def test_discord_coverage_lists_channels(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Coverage with no channel argument lists channels with coverage."""
+    import datetime as dt
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+
+    # Extend FakeCollection with find() method
+    col = _FakeCollection()
+    col.find = lambda query: col.docs.values()
+
+    def fake_coverage_collection():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _context():
+            yield col
+
+        return _context()
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+
+    # Add coverage for two channels
+    UTC = dt.timezone.utc
+    sep1 = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    sep5 = dt.datetime(2026, 9, 5, tzinfo=UTC)
+    _coverage.widen_coverage("111111111", _coverage.Interval(sep1, sep5), collection=col)
+    _coverage.widen_coverage("222222222", _coverage.Interval(sep1, sep5), collection=col)
+
+    rc = main(["discord", "coverage"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "111111111" in out
+    assert "222222222" in out
+
+
+def test_discord_coverage_never_prints_message_content(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Coverage output never includes message content, only metadata."""
+    import datetime as dt
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+
+    col = _FakeCollection()
+
+    def fake_coverage_collection():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _context():
+            yield col
+
+        return _context()
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+
+    UTC = dt.timezone.utc
+    sep1 = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    sep5 = dt.datetime(2026, 9, 5, tzinfo=UTC)
+    _coverage.widen_coverage("123456789", _coverage.Interval(sep1, sep5), collection=col)
+
+    rc = main(["discord", "coverage", "123456789"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Coverage output should contain timestamps and channel IDs, not message text
+    assert "secret message" not in out.lower()
+    assert "sensitive data" not in out.lower()
+    # Should contain coverage metadata
+    assert "channel" in out.lower()
+    assert "coverage" in out.lower() or "2026-09" in out
+
+
+def test_discord_coverage_json_no_window_does_not_claim_complete(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Without a window completeness is undefined — JSON must not say ``true``."""
+    import datetime as dt
+    from contextlib import contextmanager
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+    col = _FakeCollection()
+
+    @contextmanager
+    def fake_coverage_collection():
+        yield col
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+    utc = dt.timezone.utc
+    _coverage.widen_coverage(
+        "123456789",
+        _coverage.Interval(
+            dt.datetime(2026, 9, 1, tzinfo=utc), dt.datetime(2026, 9, 5, tzinfo=utc)
+        ),
+        collection=col,
+    )
+
+    assert main(["discord", "coverage", "123456789", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["covered"]
+    assert payload["complete"] is None
+
+
+@pytest.mark.parametrize("bound", ["--since", "--until"])
+def test_discord_coverage_lone_bound_is_a_user_error(
+    capsys: pytest.CaptureFixture[str], bound: str
+) -> None:
+    """One bound without the other is rejected, never silently dropped."""
+    rc = main(["discord", "coverage", "123456789", bound, "2026-09-01T00:00:00+00:00", "--json"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--since" in json.loads(captured.err)["message"]

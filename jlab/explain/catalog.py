@@ -124,8 +124,9 @@ _DISCORD = """\
 # jetson-ai-lab-cli discord
 
 Read-only Discord noun group. Lists public channels, reads messages, ranks
-active channels, scans participation statistics, and verifies connectivity.
-Public channels only by default (`--all` is the sole private opt-in).
+active channels, scans participation statistics, inspects cache coverage, and
+verifies connectivity. Public channels only by default (`--all` is the sole
+private opt-in).
 
 ## Verbs
 
@@ -134,6 +135,8 @@ Public channels only by default (`--all` is the sole private opt-in).
 - `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
 - `jetson-ai-lab-cli discord members [--since DAYS] [--json]` — scan participation statistics.
 - `jetson-ai-lab-cli discord links [--since DAYS] [--json]` — scan shared addresses.
+- `jetson-ai-lab-cli discord coverage [CHANNEL_ID] [--since] [--until]`
+  — inspect cache coverage metadata.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -285,6 +288,32 @@ message is the jump link in the same row, which is always live.
 """
 
 
+_DISCORD_COVERAGE = """\
+# jetson-ai-lab-cli discord coverage
+
+Inspect what time windows the jlab message cache holds for a channel, without
+opening MongoDB or decrypting message content. Coverage is the cache's central
+invariant: every incremental-fetch and gap-reporting guarantee depends on it.
+
+Omit the channel id to list all channels with coverage records. Pass a channel
+id to show what intervals the cache covers for that channel. With `--since` and
+`--until` (ISO-8601 timestamps), show covered and uncovered spans within that
+time window and whether the window is fully cached (complete) or has gaps.
+
+Without a time window, the verb shows the recorded intervals and notes that
+completeness requires a window. With a window, it shows both covered spans and
+the gaps between them.
+
+## Usage
+
+    jetson-ai-lab-cli discord coverage
+    jetson-ai-lab-cli discord coverage 123456789012345678
+    jetson-ai-lab-cli discord coverage 123456789012345678 \\
+      --since 2026-09-01T00:00:00+00:00 --until 2026-09-15T00:00:00+00:00
+    jetson-ai-lab-cli discord coverage 123456789012345678 --json
+"""
+
+
 _DISCORD_PURGE = """\
 # jetson-ai-lab-cli discord purge
 
@@ -347,6 +376,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "active"): _DISCORD_ACTIVE,
     ("discord", "members"): _DISCORD_MEMBERS,
     ("discord", "links"): _DISCORD_LINKS,
+    ("discord", "coverage"): _DISCORD_COVERAGE,
     ("discord", "purge"): _DISCORD_PURGE,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,

@@ -12,6 +12,7 @@ import argparse
 
 from jlab import purge as _purge_mod
 from jlab.cli import _discord
+from jlab.cli._commands import coverage as _coverage_cmd
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
 from jlab.links import cache as _links_cache_mod
@@ -589,6 +590,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
                 "[--json] — delete from the cache and derived reports "
                 "(preview unless --yes)",
+                "coverage [<channel_id>] [--since TS] [--until TS] — inspect "
+                "cache coverage metadata, never message content",
                 "doctor — verify token + guild readable, jlab-mongodb cache "
                 "reachable, and cache content encryption measured",
                 "overview — describe this noun group",
@@ -804,6 +807,9 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     pg.add_argument("--json", action="store_true", help=_JSON_HELP)
     pg.set_defaults(func=cmd_discord_purge, json=False, yes=False)
+
+    # coverage
+    _coverage_cmd.register(noun_sub)
 
     # doctor
     dr = noun_sub.add_parser(
