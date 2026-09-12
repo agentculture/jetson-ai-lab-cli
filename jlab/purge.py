@@ -233,7 +233,14 @@ def purge_older_than(
             ),
             remediation="pass a whole number of days greater than zero, e.g. --older-than 365",
         )
-    cutoff = (now or dt.datetime.now(dt.timezone.utc)) - dt.timedelta(days=days)
+    try:
+        cutoff = (now or dt.datetime.now(dt.timezone.utc)) - dt.timedelta(days=days)
+    except OverflowError:
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"refusing to purge: --older-than {days} days reaches before year 1",
+            remediation="pass a realistic retention window, e.g. --older-than 365",
+        )
     cache = _with_collection(
         collection, lambda col: _cache.delete_older_than(cutoff, collection=col, dry_run=dry_run)
     )

@@ -368,6 +368,13 @@ def test_purge_older_than_prunes_cache_and_stale_report_runs(key: str, tmp_path)
     assert [m["message_id"] for m in _cache.fetch_messages(collection=col)] == ["new"]
 
 
+def test_purge_older_than_refuses_an_overflowing_window(key: str) -> None:
+    col = _FakeCollection()
+    with pytest.raises(CliError) as excinfo:
+        _purge.purge_older_than(10**12, collection=col, report_dirs=[])
+    assert excinfo.value.code == EXIT_USER_ERROR
+
+
 def test_purge_older_than_refuses_a_non_positive_window(key: str) -> None:
     col = _FakeCollection()
     with pytest.raises(CliError) as excinfo:
