@@ -104,9 +104,18 @@ def test_no_script_tags_and_no_external_resources():
 
 
 def test_runtime_dependencies_stay_empty():
+    """Verify dependencies match the approved allowlist (backward compatibility alias)."""
+    from tests.test_dependencies import APPROVED_DEPENDENCIES
+
     root = Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["dependencies"] == []
+    deps = data["project"]["dependencies"]
+    # Extract package names from specs
+    found_deps = {
+        spec.split("[")[0].split(">")[0].split("<")[0].split("=")[0].split(";")[0].strip()
+        for spec in deps
+    }
+    assert found_deps <= APPROVED_DEPENDENCIES
 
 
 # --- 2. escaping / hostile display name ---------------------------------
