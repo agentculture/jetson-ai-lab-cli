@@ -336,3 +336,52 @@ def test_message_collection_rejects_legacy_ports(
         with _mongo.message_collection():
             pass
     assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# coverage_collection() — same guards, and journal-acknowledged writes (o12)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingPyMongoModule(_FakePyMongoModuleWithDb):
+    def MongoClient(self, uri, **kw):
+        self.client_kwargs = kw
+        return super().MongoClient(uri, **kw)
+
+
+def test_coverage_collection_yields_the_coverage_collection_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _RecordingPyMongoModule()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.coverage_collection() as col:
+        assert col == f"collection:{_mongo.COVERAGE_COLLECTION}"
+    assert fake.last_client.closed is True
+    assert _mongo.COVERAGE_COLLECTION != _mongo.MESSAGES_COLLECTION
+
+
+@pytest.mark.parametrize("opener", ["message_collection", "coverage_collection"])
+def test_cache_handles_request_journaled_writes(
+    monkeypatch: pytest.MonkeyPatch, opener: str
+) -> None:
+    """Coverage widens on "the write returned"; that must mean the journal has it."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _RecordingPyMongoModule()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+    with getattr(_mongo, opener)():
+        pass
+    assert fake.client_kwargs.get("journal") is True
+
+
+@pytest.mark.parametrize("port", [27017, 27018])
+def test_coverage_collection_rejects_legacy_ports(
+    monkeypatch: pytest.MonkeyPatch, port: int
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, f"mongodb://localhost:{port}/jlab")
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.coverage_collection():
+            pass
+    assert exc.value.code == 2
