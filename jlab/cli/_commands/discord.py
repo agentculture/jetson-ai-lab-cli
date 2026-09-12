@@ -1,6 +1,6 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, links, purge, doctor, overview.
+Verbs: channels, read, active, members, links, fetch, purge, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 
+from jlab import fetch as _fetch_mod
 from jlab import purge as _purge_mod
 from jlab.cli import _discord
 from jlab.cli._commands import coverage as _coverage_cmd
@@ -477,6 +478,41 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
     return None
 
 
+# -- fetch --------------------------------------------------------------------
+
+
+def _fetch_text(result: dict) -> str:
+    head = "complete" if result["complete"] else "incomplete"
+    lines = [f"{head}: channel {result['channel_id']}"]
+    lines.append(f"cache: {result['stored']} messages stored ({result['suppressed']} suppressed)")
+    lines.append(
+        f"spans: {len(result['fetched'])} fetched, "
+        f"{len(result['already_covered'])} already covered"
+    )
+    for span in result["incomplete"]:
+        lines.append(f"  incomplete {span['start']}..{span['end']}: {span['reason']}")
+    for span in result["uncovered"]:
+        lines.append(f"  uncovered {span['start']}..{span['end']}")
+    return "\n".join(lines)
+
+
+def cmd_discord_fetch(args: argparse.Namespace) -> int:
+    until_raw = getattr(args, "until", None)
+    until = _fetch_mod.parse_until(until_raw) if until_raw else None
+    max_messages = getattr(args, "max_messages", None)
+    result = _fetch_mod.fetch_channel(args.channel_id, until=until, max_messages=max_messages)
+    for span in result["fetched"]:
+        emit_diagnostic(f"fetched {span['start']}..{span['end']}")
+    if not result["complete"]:
+        emit_diagnostic(f"fetch incomplete: {len(result['uncovered'])} span(s) still uncovered")
+    json_mode = bool(getattr(args, "json", False))
+    if json_mode:
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_fetch_text(result), json_mode=False)
+    return 0
+
+
 # -- purge -------------------------------------------------------------------
 
 
@@ -587,6 +623,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "links [--since D] [--concurrency C] [--include-bots] "
                 "[--from-cache RUN] [--json] — scan + write a shared-address "
                 "HTML report and CSVs",
+                "fetch <channel_id> [--until DATE] [--max-messages N] [--json] "
+                "— backward-page a public channel's missing history into the cache",
                 "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
                 "[--json] — delete from the cache and derived reports "
                 "(preview unless --yes)",
@@ -785,6 +823,30 @@ def register(sub: argparse._SubParsersAction) -> None:
         include_bots=False,
         from_cache=None,
     )
+
+    # fetch
+    ft = noun_sub.add_parser(
+        "fetch",
+        help="Backward-page a public channel's missing history into the cache.",
+    )
+    ft.add_argument("channel_id", help="Numeric channel id.")
+    ft.add_argument(
+        "--until",
+        default=None,
+        help=(
+            "Drain backward until messages predate this ISO-8601 date "
+            "(default: the channel's beginning)."
+        ),
+    )
+    ft.add_argument(
+        "--max-messages",
+        dest="max_messages",
+        type=int,
+        default=None,
+        help="Total message budget for this run (default: unbounded).",
+    )
+    ft.add_argument("--json", action="store_true", help=_JSON_HELP)
+    ft.set_defaults(func=cmd_discord_fetch, json=False, until=None, max_messages=None)
 
     # purge
     pg = noun_sub.add_parser(
