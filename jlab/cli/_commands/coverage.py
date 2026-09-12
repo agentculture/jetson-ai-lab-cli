@@ -32,6 +32,15 @@ def cmd_discord_coverage(args: argparse.Namespace) -> int:
             "pass a numeric Discord channel id",
         )
 
+    since = getattr(args, "since", None)
+    until = getattr(args, "until", None)
+    if (since is None) != (until is None):
+        raise CliError(
+            EXIT_USER_ERROR,
+            "--since and --until must be given together",
+            "pass both bounds to inspect a window, or neither to list recorded intervals",
+        )
+
     # If no channel specified, list channels with coverage
     if channel_id is None:
         channels = _coverage.covered_channels()
@@ -43,8 +52,6 @@ def cmd_discord_coverage(args: argparse.Namespace) -> int:
         return 0
 
     # Parse optional time bounds
-    since = getattr(args, "since", None)
-    until = getattr(args, "until", None)
     window = None
     if since is not None and until is not None:
         try:
@@ -64,6 +71,10 @@ def cmd_discord_coverage(args: argparse.Namespace) -> int:
 
     # Query coverage
     result = _coverage.describe(channel_id, window)
+    if window is None:
+        # describe() reports bool(covered) here; with no window that boolean
+        # means nothing, so never let recorded intervals read as "complete".
+        result["complete"] = None
 
     if json_mode:
         emit_result(result, json_mode=True)

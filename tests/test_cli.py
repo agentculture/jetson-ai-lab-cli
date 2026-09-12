@@ -408,3 +408,51 @@ def test_discord_coverage_never_prints_message_content(
     # Should contain coverage metadata
     assert "channel" in out.lower()
     assert "coverage" in out.lower() or "2026-09" in out
+
+
+def test_discord_coverage_json_no_window_does_not_claim_complete(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Without a window completeness is undefined — JSON must not say ``true``."""
+    import datetime as dt
+    from contextlib import contextmanager
+
+    from jlab import coverage as _coverage
+    from tests.test_coverage import _FakeCollection
+
+    monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
+    _coverage.release_all_locks()
+    col = _FakeCollection()
+
+    @contextmanager
+    def fake_coverage_collection():
+        yield col
+
+    monkeypatch.setattr("jlab.mongo.coverage_collection", fake_coverage_collection)
+    utc = dt.timezone.utc
+    _coverage.widen_coverage(
+        "123456789",
+        _coverage.Interval(
+            dt.datetime(2026, 9, 1, tzinfo=utc), dt.datetime(2026, 9, 5, tzinfo=utc)
+        ),
+        collection=col,
+    )
+
+    assert main(["discord", "coverage", "123456789", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["covered"]
+    assert payload["complete"] is None
+
+
+@pytest.mark.parametrize("bound", ["--since", "--until"])
+def test_discord_coverage_lone_bound_is_a_user_error(
+    capsys: pytest.CaptureFixture[str], bound: str
+) -> None:
+    """One bound without the other is rejected, never silently dropped."""
+    rc = main(["discord", "coverage", "123456789", bound, "2026-09-01T00:00:00+00:00", "--json"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--since" in json.loads(captured.err)["message"]
