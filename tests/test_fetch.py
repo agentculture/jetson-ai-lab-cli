@@ -474,3 +474,45 @@ def test_explain_discord_fetch_resolves(capsys: pytest.CaptureFixture[str]) -> N
     rc = main(["explain", "discord", "fetch"])
     assert rc == 0
     assert "discord fetch" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Gate fixes: a channel from another guild, and a missing key/URI, are refused
+# before any history() call
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_refuses_a_channel_from_another_guild_before_any_history_call(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """A public channel in a different guild the bot belongs to is not ours to cache."""
+    chan = _BackwardChannel("42090", "elsewhere", _window_msgs(3), public=True, guild_id=999)
+    _seam(monkeypatch, chan)
+    col = _FakeCollection()
+    with pytest.raises(CliError) as info:
+        _fetch_mod.fetch_channel(
+            "42090", message_collection=col, coverage_collection=_cov(col), suppression=col
+        )
+    assert info.value.code == EXIT_USER_ERROR
+    assert "elsewhere" not in info.value.message
+    assert chan.history_calls == []
+    assert list(col.find({})) == []
+
+
+def test_cli_fetch_without_a_cache_key_exits_2_before_reading_discord(
+    monkeypatch: pytest.MonkeyPatch, lock_home, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv(_KEY_ENV, raising=False)
+    monkeypatch.setattr(_discord, "_seam", lambda: _RaisingSeam())
+    monkeypatch.setattr(_mongo, "message_collection", lambda *a, **k: _ctx(_FakeCollection()))
+    assert main(["discord", "fetch", "42091"]) == 2
+    assert _KEY_ENV in capsys.readouterr().err
+
+
+def test_cli_fetch_without_a_mongo_uri_exits_2_before_reading_discord(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("JLAB_MONGO_URI", raising=False)
+    monkeypatch.setattr(_discord, "_seam", lambda: _RaisingSeam())
+    assert main(["discord", "fetch", "42092"]) == 2
+    assert "JLAB_MONGO_URI" in capsys.readouterr().err

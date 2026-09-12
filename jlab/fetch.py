@@ -49,6 +49,8 @@ from typing import Any
 
 from jlab import cache as _cache
 from jlab import coverage as _coverage
+from jlab import crypto as _crypto
+from jlab import mongo as _mongo
 from jlab.cli import _discord
 from jlab.cli._errors import EXIT_USER_ERROR, CliError
 
@@ -175,6 +177,14 @@ def fetch_channel(
         )
     window = _coverage.Interval(window_start, started)
 
+    # Preflight: a missing key or jlab-mongodb URI is an exit-2 setup error, so
+    # surface it before connecting to Discord — never after a span of message
+    # bodies has already been downloaded only to be thrown away.
+    _crypto._key_material()
+    if message_collection is None:
+        with _mongo.message_collection():
+            pass
+
     suppressed_total: dict[str, int] = {"n": 0}
 
     def store(_span: _coverage.Interval, messages: list[dict]) -> None:
@@ -190,6 +200,18 @@ def fetch_channel(
         guild = await client.fetch_guild(gid)
         channel = await client.fetch_channel(channel_id)
         everyone = guild.default_role
+        # The bot may belong to other guilds; a channel id from one of them
+        # would otherwise pass the public test against OUR @everyone role.
+        owner = getattr(getattr(channel, "guild", None), "id", None)
+        if owner is None or int(owner) != int(gid):
+            raise CliError(
+                code=EXIT_USER_ERROR,
+                message=f"refusing to fetch channel {channel_id}: not a channel of guild {gid}",
+                remediation=(
+                    "fetch only reads the configured guild's public channels; "
+                    "run `jetson-ai-lab-cli discord channels` to list them"
+                ),
+            )
         # o3: the public check is re-applied to THIS id, not inherited from a
         # listing, and runs before any history() call — _channel_public is
         # the single source of the public test (never re-derived here).

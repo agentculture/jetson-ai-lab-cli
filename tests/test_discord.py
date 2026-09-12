@@ -2079,9 +2079,20 @@ class _BackwardChannel:
 
     page_cap = _discord._BACKWARD_PAGE_SIZE
 
-    def __init__(self, id: str, name: str, messages: list, *, public: bool = True) -> None:
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        messages: list,
+        *,
+        public: bool = True,
+        guild_id: int | None = None,
+    ) -> None:
         self.id = id
         self.name = name
+        self.guild = types.SimpleNamespace(
+            id=int(guild_id if guild_id is not None else _discord._GUILD_ID_DEFAULT)
+        )
         self.type = _FakeType("text")
         self._public = public
         self._messages = messages  # oldest-first
