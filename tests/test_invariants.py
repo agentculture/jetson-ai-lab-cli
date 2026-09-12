@@ -1,227 +1,204 @@
-"""Invariant guards for the read-only Discord surface and sibling-repo isolation.
+"""Invariant guards for the read-only Discord surface and sibling-repo isolation (t15).
 
-These tests assert that:
-1. No code path under jlab/ that reaches Discord ever calls a Discord write method
-2. No code under jlab/ edits the sibling discord-bot-cli repository
-3. Every WORKAROUND marker has a valid format (discord-bot-cli#N)
+1. No module under jlab/ that reaches Discord calls a Discord write method (o2).
+2. Nothing under jlab/ writes into, or shells out against, the sibling
+   discord-bot-cli checkout — importing ``discord_bot_cli`` as a library is fine.
+3. Every ``WORKAROUND`` marker names an upstream issue: ``WORKAROUND(discord-bot-cli#N)``.
+
+Each guard is a small detector run over jlab/ AND over deliberately bad snippets,
+so a detector that silently stops matching fails here rather than passing vacuously.
+Whether the sibling checkout itself is clean is a property of the developer's
+machine, not of this code, so it is not asserted.
 """
 
 from __future__ import annotations
 
 import ast
 import re
-import subprocess
 from pathlib import Path
 
-# Discord write methods that must never be called on Discord objects.
-# Note: Mongo operations like delete_many/delete_one in jlab/cache.py are NOT
-# Discord objects and should not trip this test.
-DISCORD_WRITE_METHODS = {
-    "send",
-    "reply",
-    "edit",
-    "delete",
-    "add_reaction",
-    "remove_reaction",
-    "clear_reactions",
-    "create_thread",
-    "pin",
-    "unpin",
-    "publish",
-    "create_webhook",
-    "purge",
-}
+import pytest
+
+JLAB = Path(__file__).resolve().parent.parent / "jlab"
+
+DISCORD_WRITE_METHODS = frozenset(
+    {
+        "send",
+        "reply",
+        "edit",
+        "delete",
+        "add_reaction",
+        "remove_reaction",
+        "clear_reactions",
+        "create_thread",
+        "pin",
+        "unpin",
+        "publish",
+        "create_webhook",
+        "purge",
+    }
+)
+
+_SIBLING_MARKERS = ("discord-bot-cli", "DISCORD_BOT_CLI_PROJECT", "DISCORD_BOT_CLI")
+_WRITE_CALLS = frozenset(
+    {
+        "open",
+        "write_text",
+        "write_bytes",
+        "touch",
+        "mkdir",
+        "unlink",
+        "rmdir",
+        "rename",
+        "replace",
+        "rmtree",
+        "copy",
+        "copyfile",
+        "copytree",
+        "move",
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "Popen",
+        "system",
+    }
+)
+_MARKER = re.compile(r"WORKAROUND\b(\([^)]*\))?")
+_VALID_MARKER = re.compile(r"\(discord-bot-cli#\d+\)")
 
 
-def _find_discord_touching_modules() -> set[Path]:
-    """Discover all modules under jlab/ that reach Discord.
-
-    Scans for uses of ``_discord._run`` or ``discord_client`` to identify
-    modules that touch the Discord adapter.
-    """
-    jlab_path = Path(__file__).parent.parent / "jlab"
-    modules = set()
-
-    for py_file in jlab_path.rglob("*.py"):
-        content = py_file.read_text()
-        # Check for _discord._run or discord_client usage
-        if "_discord._run" in content or "discord_client" in content:
-            modules.add(py_file)
-
-    return modules
+def _sources() -> list[Path]:
+    return sorted(JLAB.rglob("*.py"))
 
 
-def _find_write_method_calls(tree: ast.AST) -> list[tuple[int, str, str]]:
-    """Walk an AST and find all calls to Discord write methods.
+def _reaches_discord(source: str) -> bool:
+    return "_discord._run" in source or "discord_client" in source or "_run(action" in source
 
-    Returns a list of (line_number, method_name, context_snippet).
-    A call is flagged if it's an attribute access on any name followed by
-    a call with one of the DISCORD_WRITE_METHODS names.
-    """
-    findings = []
 
-    class CallVisitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call) -> None:
-            # Check if this is a method call on an object
-            if isinstance(node.func, ast.Attribute):
-                method_name = node.func.attr
-                if method_name in DISCORD_WRITE_METHODS:
-                    findings.append((node.lineno, method_name, ast.unparse(node.func)))
-            self.generic_visit(node)
+def write_method_calls(source: str) -> list[str]:
+    """``name.<write method>(...)`` calls in *source*, as ``line: expr``."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in DISCORD_WRITE_METHODS
+        ):
+            found.append(f"{node.lineno}: {ast.unparse(node.func)}")
+    return found
 
-    CallVisitor().visit(tree)
-    return findings
+
+def sibling_writes(source: str) -> list[str]:
+    """Write-capable calls whose source text mentions the sibling checkout."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name not in _WRITE_CALLS:
+            continue
+        text = ast.unparse(node)
+        if any(marker in text for marker in _SIBLING_MARKERS):
+            found.append(f"{node.lineno}: {text}")
+    return found
+
+
+def bad_markers(source: str) -> list[str]:
+    """``WORKAROUND`` markers that do not name ``discord-bot-cli#<digits>``."""
+    found = []
+    for lineno, line in enumerate(source.splitlines(), 1):
+        for match in _MARKER.finditer(line):
+            if not (match.group(1) and _VALID_MARKER.fullmatch(match.group(1))):
+                found.append(f"{lineno}: {match.group(0)}")
+    return found
+
+
+# --- the detectors really detect -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "async def f(channel):\n    await channel.send('x')\n",
+        "async def f(message):\n    await message.add_reaction('x')\n",
+        "async def f(channel):\n    await channel.create_thread(name='x')\n",
+        "async def f(message):\n    await message.delete()\n",
+    ],
+)
+def test_write_method_detector_flags_a_discord_write(snippet: str) -> None:
+    assert write_method_calls(snippet)
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "open(os.environ['DISCORD_BOT_CLI_PROJECT'] + '/x', 'w')\n",
+        "Path.home().joinpath('git/discord-bot-cli/x').write_text('y')\n",
+        "subprocess.run(['git', '-C', '~/git/discord-bot-cli', 'commit'])\n",
+        "shutil.rmtree(Path('~/git/discord-bot-cli'))\n",
+    ],
+)
+def test_sibling_write_detector_flags_a_write(snippet: str) -> None:
+    assert sibling_writes(snippet)
+
+
+def test_sibling_write_detector_allows_importing_the_library() -> None:
+    assert not sibling_writes("from discord_bot_cli import discord_client\n")
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "# WORKAROUND(discord-bot-cli) no issue\n",
+        "# WORKAROUND(discord-bot-cli#) empty number\n",
+        "# WORKAROUND(other-repo#12) wrong repo\n",
+        "# WORKAROUND: bare marker\n",
+    ],
+)
+def test_marker_detector_flags_a_malformed_marker(snippet: str) -> None:
+    assert bad_markers(snippet)
+
+
+def test_marker_detector_accepts_a_well_formed_marker() -> None:
+    assert not bad_markers("# WORKAROUND(discord-bot-cli#14) — author.bot\n")
+
+
+# --- jlab/ holds the invariants --------------------------------------------
+
+
+def test_discord_modules_are_discovered() -> None:
+    reaching = {
+        p.relative_to(JLAB).as_posix() for p in _sources() if _reaches_discord(p.read_text())
+    }
+    assert {"cli/_discord.py", "fetch.py"} <= reaching
 
 
 def test_no_discord_write_methods() -> None:
-    """Assert no Discord write methods are called in modules that reach Discord.
-
-    Scans jlab/cli/_discord.py, jlab/fetch.py, jlab/members/resolve.py, and
-    any future modules that use _discord._run or discord_client, and fails if
-    any contains a call to send, reply, edit, delete, add_reaction, etc.
-    """
-    modules = _find_discord_touching_modules()
-
-    errors: list[str] = []
-
-    for module_path in sorted(modules):
-        try:
-            content = module_path.read_text()
-            tree = ast.parse(content, filename=str(module_path))
-        except SyntaxError as exc:
-            # Syntax errors are a real failure, not a test failure
-            raise AssertionError(f"Syntax error in {module_path}: {exc}") from exc
-
-        calls = _find_write_method_calls(tree)
-        for lineno, method_name, context in calls:
-            errors.append(
-                f"{module_path}:{lineno} calls {method_name}() on {context} — "
-                f"read-only surface breach"
-            )
-
-    assert not errors, "Discord write methods found in jlab/ modules:\n" + "\n".join(errors)
-
-
-def test_no_discord_bot_cli_edits() -> None:
-    """Assert nothing under jlab/ writes to the sibling discord-bot-cli repo.
-
-    Scans jlab/ for:
-    - File opens/writes to paths under DISCORD_BOT_CLI_PROJECT or ~/git/discord-bot-cli
-    - subprocess calls to paths under those directories with write intent
-
-    Also checks that the sibling repo's working tree is clean (no files were
-    modified by this test or prior invocation).
-    """
-    jlab_path = Path(__file__).parent.parent / "jlab"
-    home = Path.home()
-    discord_cli_paths = [
-        home / "git" / "discord-bot-cli",
-        "${DISCORD_BOT_CLI_PROJECT}",  # Also check for env var usage
+    """o2: the read-only surface stays literally read-only as the seam grows."""
+    errors = [
+        f"{path.relative_to(JLAB)}:{hit}"
+        for path in _sources()
+        if _reaches_discord(path.read_text())
+        for hit in write_method_calls(path.read_text())
     ]
-
-    errors: list[str] = []
-
-    for py_file in jlab_path.rglob("*.py"):
-        try:
-            content = py_file.read_text()
-            tree = ast.parse(content, filename=str(py_file))
-        except SyntaxError as exc:
-            raise AssertionError(f"Syntax error in {py_file}: {exc}") from exc
-
-        class WriteVisitor(ast.NodeVisitor):
-            def visit_Call(self, node: ast.Call) -> None:
-                # Check for open() calls with write mode
-                if isinstance(node.func, ast.Name) and node.func.id == "open":
-                    # open(path, ...) — check the first argument
-                    if node.args:
-                        path_arg = ast.unparse(node.args[0])
-                        for discord_path in discord_cli_paths:
-                            if str(discord_path) in path_arg:
-                                # Check if write mode is set
-                                has_write_mode = any(
-                                    (
-                                        isinstance(kw.value, ast.Constant)
-                                        and "w" in str(kw.value.value)
-                                    )
-                                    or (isinstance(arg, ast.Constant) and "w" in str(arg.value))
-                                    for kw in node.keywords
-                                    for arg in node.args[1:]
-                                )
-                                if has_write_mode or len(node.args) == 1:
-                                    # Default mode is 'r', but explicit write mode is a breach
-                                    # If there's a second arg or a mode keyword, check it
-                                    if len(node.args) > 1 or any(
-                                        kw.arg == "mode" for kw in node.keywords
-                                    ):
-                                        errors.append(
-                                            f"{py_file}:{node.lineno} opens a file in "
-                                            f"discord-bot-cli path: {path_arg}"
-                                        )
-
-                # Check for subprocess calls to paths under discord-bot-cli
-                if isinstance(node.func, ast.Attribute) and node.func.attr in (
-                    "run",
-                    "call",
-                    "check_call",
-                    "check_output",
-                    "Popen",
-                ):
-                    if node.args:
-                        cmd = ast.unparse(node.args[0])
-                        for discord_path in discord_cli_paths:
-                            if str(discord_path) in cmd:
-                                errors.append(
-                                    f"{py_file}:{node.lineno} runs subprocess with "
-                                    f"discord-bot-cli path: {cmd}"
-                                )
-
-                self.generic_visit(node)
-
-        WriteVisitor().visit(tree)
-
-    assert not errors, "discord-bot-cli edits found in jlab/:\n" + "\n".join(errors)
-
-    # Check that the sibling repo is clean
-    discord_bot_cli_path = home / "git" / "discord-bot-cli"
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(discord_bot_cli_path), "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            raise AssertionError(f"discord-bot-cli repo is not clean:\n{result.stdout}")
-    except subprocess.TimeoutExpired:
-        raise AssertionError("git status check on discord-bot-cli timed out")
-    except FileNotFoundError:
-        raise AssertionError("discord-bot-cli repo not found at ~/git/discord-bot-cli")
+    assert not errors, "Discord write calls under jlab/:\n" + "\n".join(errors)
 
 
-def test_workaround_marker_format() -> None:
-    """Assert every WORKAROUND marker has valid format: WORKAROUND(discord-bot-cli#N).
+def test_nothing_under_jlab_writes_into_the_sibling_checkout() -> None:
+    errors = [
+        f"{path.relative_to(JLAB)}:{hit}"
+        for path in _sources()
+        for hit in sibling_writes(path.read_text())
+    ]
+    assert not errors, "writes into discord-bot-cli under jlab/:\n" + "\n".join(errors)
 
-    Scans all .py files under jlab/ for WORKAROUND markers and validates that
-    each matches the pattern: WORKAROUND(discord-bot-cli#<digits>)
-    """
-    jlab_path = Path(__file__).parent.parent / "jlab"
 
-    # Pattern: WORKAROUND(discord-bot-cli#<digits>)
-    workaround_pattern = re.compile(r"WORKAROUND\(([a-z0-9_-]+#\d+)\)")
-
-    errors: list[str] = []
-
-    for py_file in jlab_path.rglob("*.py"):
-        content = py_file.read_text()
-        # Find all WORKAROUND markers
-        for i, line in enumerate(content.split("\n"), 1):
-            markers = workaround_pattern.findall(line)
-            for marker in markers:
-                # Validate marker format: should be discord-bot-cli#<number>
-                if not marker.startswith("discord-bot-cli#"):
-                    errors.append(
-                        f"{py_file}:{i} has invalid WORKAROUND marker: {marker} "
-                        f"(must be discord-bot-cli#<number>)"
-                    )
-
-    assert not errors, "Invalid WORKAROUND markers found:\n" + "\n".join(errors)
+def test_workaround_markers_name_an_upstream_issue() -> None:
+    errors = [
+        f"{path.relative_to(JLAB)}:{hit}"
+        for path in _sources()
+        for hit in bad_markers(path.read_text())
+    ]
+    assert not errors, "malformed WORKAROUND markers under jlab/:\n" + "\n".join(errors)
