@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -12,6 +13,21 @@ APPROVED_DEPENDENCIES = {
     "discord-bot-cli",
     "pymongo",
 }
+
+
+def distribution_names(specs: list[str]) -> set[str]:
+    """Extract distribution names from PEP 508 specs, normalised per PEP 503.
+
+    ``"discord-bot-cli[discord]"`` -> ``"discord-bot-cli"``;
+    ``"pymongo~=4.0"`` -> ``"pymongo"``. Splitting only on ``=`` would leave a
+    trailing ``~`` or ``!``, so the name is matched positively instead.
+    """
+    names = set()
+    for spec in specs:
+        match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", spec)
+        if match:
+            names.add(re.sub(r"[-_.]+", "-", match.group(1)).lower())
+    return names
 
 
 def test_dependencies_in_approved_allowlist() -> None:
