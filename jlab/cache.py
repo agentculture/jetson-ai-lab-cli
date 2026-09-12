@@ -478,3 +478,101 @@ def old_message_channels(cutoff: dt.datetime, *, collection: Any) -> list[str]:
     return sorted(
         str(c) for c in collection.distinct("channel_id", {"created_at": {"$lt": cutoff}})
     )
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation (t11) — what the daily sweep needs to compare a covered span
+# against Discord and remove what Discord no longer has.
+# ---------------------------------------------------------------------------
+
+
+def messages_between(
+    channel_id: str | int,
+    start: dt.datetime,
+    end: dt.datetime,
+    *,
+    collection: Any = None,
+) -> list[dict[str, Any]]:
+    """Cached messages of *channel_id* created strictly between *start* and *end*.
+
+    Both bounds are **exclusive**, matching Discord's ``after=``/``before=``
+    history cursors: a message the re-read could not have returned is never
+    a candidate for deletion. Content is decrypted (a missing or wrong key
+    raises code 2), because detecting an edit means comparing bodies.
+    """
+    query = {
+        "channel_id": _require_delete_value(channel_id, "channel_id"),
+        "created_at": {"$gt": start, "$lt": end},
+    }
+
+    def _run(col: Any) -> list[dict[str, Any]]:
+        return [_decrypt_document(doc) for doc in col.find(query).sort("created_at", 1)]
+
+    if collection is None:
+        with _mongo.message_collection() as col:
+            return _run(col)
+    return _run(collection)
+
+
+def delete_message_ids(
+    channel_id: str | int,
+    message_ids: Any,
+    *,
+    collection: Any = None,
+) -> dict[str, int]:
+    """Delete the named messages of *channel_id* only; return ``{"deleted": n}``.
+
+    Scoped by channel as well as id, so a wrong id list can never reach another
+    channel's messages. *message_ids* must be a list/tuple of non-empty plain
+    strings — ``None``, a bare string, or an entry that is empty or a dict (a
+    query operator) is refused with code 2 before anything is deleted. An
+    empty list deletes nothing and issues no query.
+    """
+    channel = _require_delete_value(channel_id, "channel_id")
+    if not isinstance(message_ids, (list, tuple)):
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=(
+                "refusing to delete by message id: expected a list of ids, " f"got {message_ids!r}"
+            ),
+            remediation="pass an explicit list of Discord message ids",
+        )
+    ids = []
+    for value in message_ids:
+        if not isinstance(value, str) or not value.strip():
+            raise CliError(
+                code=EXIT_ENV_ERROR,
+                message=f"refusing to delete by message id: {value!r} is not a plain id",
+                remediation="pass an explicit list of Discord message ids",
+            )
+        ids.append(value)
+    if not ids:
+        return {"deleted": 0}
+
+    def _run(col: Any) -> dict[str, int]:
+        result = col.delete_many({"channel_id": channel, "_id": {"$in": ids}})
+        return {"deleted": int(result.deleted_count)}
+
+    if collection is None:
+        with _mongo.message_collection() as col:
+            return _run(col)
+    return _run(collection)
+
+
+def reap_probes(*, older_than: dt.datetime, collection: Any = None) -> int:
+    """Delete leftover :func:`measure_encryption` probes stored before *older_than*.
+
+    ``_measure`` deletes its probe in a ``finally``, but a kill between the
+    store and that delete leaves one behind (risk r9). Only probes older than
+    the cutoff go, so a probe a concurrent ``doctor`` is reading back right now
+    survives. Returns how many were removed.
+    """
+    query = {"channel_id": _PROBE_PREFIX, "stored_at": {"$lt": older_than}}
+
+    def _run(col: Any) -> int:
+        return int(col.delete_many(query).deleted_count)
+
+    if collection is None:
+        with _mongo.message_collection() as col:
+            return _run(col)
+    return _run(collection)
