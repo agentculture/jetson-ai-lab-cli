@@ -313,10 +313,11 @@ def test_search_never_touches_the_discord_seam(
 def test_search_module_never_imports_the_discord_seam() -> None:
     """Static guard: jlab/search.py has no import of jlab.cli._discord at all."""
     import ast
+    from pathlib import Path
 
     import jlab.search as mod
 
-    tree = ast.parse(open(mod.__file__, encoding="utf-8").read())
+    tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
