@@ -89,8 +89,35 @@ docker run -d --name jlab-mongodb \
   mongo:8.0
 
 export JLAB_MONGO_URI="mongodb://127.0.0.1:27019/jlab"
-uv run jlab discord doctor                  # confirms the cache is reachable
+export JLAB_CACHE_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+uv run jlab discord doctor                  # confirms cache reachable + encrypted
 ```
+
+**Cached message content is encrypted by jlab itself**, before it reaches
+MongoDB, and decrypted on the way back out. MongoDB community edition has no
+encrypted storage engine, so encryption at rest cannot be delegated to the
+database — `jlab/crypto.py` does it at the application layer instead, with a
+key read only from `JLAB_CACHE_KEY`. There is **no plaintext fallback**: an
+absent, blank or under-32-character key is an exit-code-2 error and nothing is
+written. Keep the key with the deployment — losing it makes the cache
+unreadable (the fix is to re-fetch, not to recover).
+
+`jlab discord doctor` **measures** this rather than assuming it: it stores a
+marked probe through the real write path, reads the raw stored document back
+without decrypting, and fails if the marker is found in it. The construction is
+a standard-library composition (HKDF-SHA256, an HMAC-SHA256 counter-mode
+keystream, encrypt-then-MAC HMAC-SHA256) — sound, but not a standardised,
+independently reviewed AEAD, and with no key rotation; `jlab/crypto.py`'s
+docstring states the limits in full. Message *metadata* (channel id, author id,
+timestamps, jump URL) is stored in the clear on purpose so the cache stays
+queryable; only the body is encrypted.
+
+Each cached message carries three timestamps — `created_at` (Discord's),
+`updated_at` (Discord's edit timestamp, `null` when unedited) and `stored_at`
+(when jlab wrote the copy) — so an edit is detectable and the age of the local
+copy is always known. This path **retains full message bodies, by decision**:
+unlike `members` (counts only) and `links` (URLs only), a paged read and a
+regex search over history cannot be served without the text itself.
 
 Set `JLAB_MONGO_URI` from the environment — the same convention as
 `DISCORD_BOT_TOKEN` — and it must never resolve to port 27017 or 27018;

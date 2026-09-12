@@ -28,6 +28,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from jlab import cache as _cache
 from jlab import mongo as _mongo
 from jlab.cli._errors import CliError
 
@@ -283,6 +284,7 @@ def _serialize_message(message: Any, channel: Any = None) -> dict:
     """
     message_id = getattr(message, "id", None)
     created = getattr(message, "created_at", None)
+    edited = getattr(message, "edited_at", None)
     channel = channel if channel is not None else getattr(message, "channel", None)
     thread = getattr(message, "thread", None)
     return {
@@ -290,6 +292,9 @@ def _serialize_message(message: Any, channel: Any = None) -> dict:
         "author": _serialize_author(message.author),
         "content": message.content,
         "created_at": created.isoformat() if created else None,
+        # Discord's edit timestamp, None when the message was never edited.
+        # The cache stores it as ``updated_at`` so an edit is detectable.
+        "edited_at": edited.isoformat() if edited else None,
         "channel": _serialize_channel_ref(channel),
         "jump_url": _jump_url(message, channel),
         "attachments": [
@@ -821,4 +826,10 @@ def doctor(guild_id: int) -> dict:
     """
     list_channels(guild_id)
     cache = _mongo.check_cache()
-    return {"ok": True, "guild_id": str(guild_id), "cache": cache}
+    encryption = _cache.measure_encryption()
+    return {
+        "ok": True,
+        "guild_id": str(guild_id),
+        "cache": cache,
+        "encryption": encryption,
+    }
