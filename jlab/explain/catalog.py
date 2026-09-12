@@ -137,6 +137,8 @@ private opt-in).
 - `jetson-ai-lab-cli discord links [--since DAYS] [--json]` — scan shared addresses.
 - `jetson-ai-lab-cli discord coverage [CHANNEL_ID] [--since] [--until]`
   — inspect cache coverage metadata.
+- `jetson-ai-lab-cli discord fetch <channel_id> [--until DATE] [--max-messages N]` —
+  backward-page a public channel's missing history into the cache.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -314,6 +316,36 @@ the gaps between them.
 """
 
 
+_DISCORD_FETCH = """\
+# jetson-ai-lab-cli discord fetch <channel_id>
+
+Backward-page a public channel's history past the 100-message cap into the
+encrypted jlab-mongodb cache — the write path behind `discord read`'s cache
+and `discord search`'s corpus. Only the parts of the requested window that
+`jlab.coverage` does not already hold are fetched; a repeat run against a
+window already covered requests nothing.
+
+The public check (`_channel_public`, the same one every other verb uses) is
+re-applied to the id you pass, before any history request — fetching a
+private or role-gated channel by explicit id is refused (exit 1), never
+served.
+
+`--until DATE` bounds how far back the drain goes (default: the channel's
+beginning, Discord's own epoch); `--max-messages N` bounds the TOTAL messages
+fetched this invocation (default: unbounded). Both only bound the window and
+budget — coverage decides what is actually requested. The result reports
+`stored` and `suppressed` message counts, which spans were `fetched` vs
+already `covered`, and any `incomplete` or `uncovered` spans honestly, never
+presenting a partial drain as complete.
+
+## Usage
+
+    jetson-ai-lab-cli discord fetch 1234567890
+    jetson-ai-lab-cli discord fetch 1234567890 --until 2026-01-01
+    jetson-ai-lab-cli discord fetch 1234567890 --max-messages 5000
+    jetson-ai-lab-cli discord fetch 1234567890 --json
+"""
+
 _DISCORD_PURGE = """\
 # jetson-ai-lab-cli discord purge
 
@@ -377,6 +409,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "members"): _DISCORD_MEMBERS,
     ("discord", "links"): _DISCORD_LINKS,
     ("discord", "coverage"): _DISCORD_COVERAGE,
+    ("discord", "fetch"): _DISCORD_FETCH,
     ("discord", "purge"): _DISCORD_PURGE,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
