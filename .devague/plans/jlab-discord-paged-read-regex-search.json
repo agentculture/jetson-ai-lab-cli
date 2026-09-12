@@ -5,7 +5,7 @@
   "schema_version": 5,
   "status": "exported",
   "created": "2026-09-12T16:48:39Z",
-  "updated": "2026-09-12T20:34:30Z",
+  "updated": "2026-09-12T20:54:17Z",
   "targets": [
     {
       "id": "c1",
@@ -998,6 +998,30 @@
       "text": "the associate reviewer is a coding agent, not a text model: 'pi -p' runs with its built-in read, bash, edit and write tools enabled by default, and every review in this run was launched with the working directory inside the repository \u2014 a reviewer that decided to 'fix' what it found could have edited or committed to the code under review. Verified after the fact that it did not: git status is clean in the main repo and every worktree, and no commit on any branch came from it. The tool-enabled review demonstrably read files outside the diff (it quoted _collect_history), so tools do reach the repo. Mitigation: always pass --tools read,grep,find,ls (pi's documented read-only mode) or --no-tools for reviews",
       "kind": "unknown_nonblocking",
       "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r15",
+      "text": "main-agent gate inspection of the wave-3 integration, no blocking defect found in three areas: (1) retention boundary \u2014 cache.delete_older_than deletes created_at < cutoff while coverage.trim_before keeps intervals with end > cutoff clipped to [max(start,cutoff), end]; at exactly the cutoff instant coverage can under-claim but never over-claim; (2) mongo.sibling_collection returns collection.database[name] on the same client and database as a handle already guarded by jlab/mongo.py, so it cannot reach another instance; (3) the suppression record holds only the HMAC digest. RESIDUAL (compliance, not code): 'jlab discord purge --author X' echoes the raw author id back in its result ({\"target\": {\"kind\": \"author\", \"value\": X}}) on stdout. Running the retention/deletion purge from cron with stdout captured to a log file would retain the Discord id of someone who asked to be deleted. Either redact the author value in the result (e.g. show the digest or a truncated form) or document that purge output must not be logged",
+      "kind": "follow_up",
+      "task_id": "t12",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r16",
+      "text": "coverage.channel_lock is re-entrant per PROCESS, not per thread: re-entrancy is decided by 'channel in _held', a process-wide dict with no thread identity, so two threads in one process that both call channel_lock on the SAME channel are not mutually excluded \u2014 the second takes the re-entrant path and enters without flock. Verified in code; not a defect today (the CLI is single-threaded per invocation and t6 documents it), and the wave-3 contended-lock tests are valid because their helper thread takes fcntl.flock on its own open file description, which flock does treat as a separate holder. The hazard is forward-looking: t7 (discord fetch) or t11 (sweep) fanning out fetch_missing on a thread pool must never run two workers for the same channel at once; asyncio coroutines that hold channel_lock across an await have the same exposure",
+      "kind": "unknown_nonblocking",
+      "task_id": "t7",
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r17",
+      "text": "found by the qwen worker review of t4, verified by the main agent: t4 overclaims backward compatibility. (1) 'jlab discord read --json' now emits {channel_id, messages, complete}; before t4 there was no 'complete' key, so the JSON contract changed (additively). (2) read_messages' docstring states 'default output stays byte-identical', which holds for text mode only. (3) the test named test_read_messages_default_limit_byte_identical_to_a_single_page asserts only substrings of two text-mode lines ('ann' in lines[0] and 'hello' in lines[0]) \u2014 it compares no bytes and never exercises --json. Against the approved h38 ('read returns the same messages as today') t4 holds; against its own claims it does not. Fix after the wave-3 merges (tests/test_discord.py is also touched by the integration cherry-pick): correct the docstring, rename and tighten the test to exact line equality, add a --json test pinning 'complete' as a deliberate additive field, and note the JSON change in CHANGELOG. The same review's second claim (429 resume duplicating a page) was refuted \u2014 before=min(created_at) is exclusive; the true edge is the millisecond-tie skip already recorded as r8",
+      "kind": "follow_up",
+      "task_id": "t4",
       "resolved": false,
       "resolution": ""
     }
