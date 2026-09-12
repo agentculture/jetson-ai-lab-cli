@@ -28,6 +28,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from jlab import mongo as _mongo
 from jlab.cli._errors import CliError
 
 _GUILD_ID_DEFAULT = "1326246312072581160"
@@ -681,9 +682,15 @@ def scan_window(
 
 
 def doctor(guild_id: int) -> dict:
-    """Verify token + importable + guild readable.
+    """Verify token + importable + guild readable, and the jlab-mongodb cache.
 
-    Raises :class:`CliError` on failure.
+    Raises :class:`CliError` on failure — from the existing token/extra/guild
+    checks, or from :func:`jlab.mongo.check_cache` when the paged-read cache
+    (jlab-mongodb) is absent, unreachable, or turns out not to be jlab's own
+    dedicated instance. Either failure exits code 2 with an actionable
+    ``hint:``; this function never returns a partial/silent result on
+    failure.
     """
     list_channels(guild_id)
-    return {"ok": True, "guild_id": str(guild_id)}
+    cache = _mongo.check_cache()
+    return {"ok": True, "guild_id": str(guild_id), "cache": cache}

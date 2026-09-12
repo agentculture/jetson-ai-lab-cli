@@ -195,7 +195,12 @@ _DISCORD_DOCTOR = """\
 # jetson-ai-lab-cli discord doctor
 
 Verify the Discord bot token is set, ``discord-bot-cli`` is importable, and
-the guild is readable. Exits 2 on environment error.
+the guild is readable — plus, for the paged-read cache, that ``pymongo`` is
+installed and the jlab-mongodb instance named by ``JLAB_MONGO_URI`` is
+reachable and is genuinely jlab's own dedicated instance (never the legacy
+qq-mongodb on 27017 or the eidetic-mongo memory store on 27018). Exits 2 on
+any environment error, including an absent or unreachable cache — never a
+silent empty result.
 
 ## Usage
 
