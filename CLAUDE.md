@@ -175,11 +175,14 @@ not, and they are load-bearing:
   always known. Metadata (channel id, author id, timestamps, jump URL) is
   stored in the clear on purpose so the cache stays queryable; only the body
   is encrypted.
-- **Honest limitation:** the construction is a stdlib composition
-  (HKDF-SHA256, an HMAC-SHA256 counter-mode keystream, encrypt-then-MAC), not
-  a standardised, independently reviewed AEAD, and there is no key rotation.
-  `jlab/crypto.py`'s module docstring states the limits in full; don't
-  overstate them elsewhere.
+- **Construction and honest limits:** AES-256-GCM from the approved
+  `cryptography` dependency (deviation d1 replaced an earlier hand-rolled
+  HMAC-SHA256 keystream), with the content key derived from `JLAB_CACHE_KEY`
+  via HKDF-SHA256 and a fresh 96-bit nonce per message. It protects content at
+  rest in jlab-mongodb, not against anyone holding the key, process memory or
+  the environment; ciphertext length leaks plaintext length; there is no key
+  rotation (re-keying means re-fetching). `jlab/crypto.py`'s module docstring
+  states the limits in full; don't overstate them elsewhere.
 
 ### Purge: per-user / per-channel deletion and the retention bound (`jlab discord purge`)
 
