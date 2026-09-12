@@ -38,7 +38,9 @@ unchanged; the values a cache can actually supply are what they are.
 **Gap reporting.** "Covered" is decided the same way :mod:`jlab.coverage`
 decides it everywhere else: the window from the oldest message this call
 would return to *now* is checked against the channel's recorded coverage
-intervals (:func:`jlab.coverage.subtract`). A channel with no cached messages
+intervals (:func:`jlab.coverage.describe`, the same "what is missing in a
+window" primitive o18's gap reporting uses, never called with
+``window=None``). A channel with no cached messages
 and no coverage at all is reported as an uncovered window from
 :data:`jlab.fetch.DISCORD_EPOCH` to now, rather than as an empty result that
 reads as "no messages" (o21).
@@ -151,18 +153,27 @@ def serve_read(
         window_start = DISCORD_EPOCH
 
     if window_start >= started:
-        gaps: list[_coverage.Interval] = []
+        # A degenerate (zero-length) window: nothing to be missing.
+        complete, uncovered = True, []
     else:
-        window = _coverage.Interval(window_start, started)
-        gaps = _coverage.subtract(window, covered)
+        # jlab.coverage.describe is the single source of "what is missing in
+        # a window" (o18's rule, reused here rather than re-derived): never
+        # called with window=None, which describe's own docstring warns is
+        # not a completeness claim.
+        described = _coverage.describe(
+            str(channel_id),
+            _coverage.Interval(window_start, started),
+            collection=coverage_collection,
+        )
+        complete = described["complete"]
+        uncovered = described["uncovered"]
 
-    complete = not gaps
     if complete:
         reason = None
     else:
         reason = (
-            f"{len(gaps)} gap(s) between {gaps[0].start.isoformat()} and "
-            f"{gaps[-1].end.isoformat()} are not cached; pass --refresh to "
+            f"{len(uncovered)} gap(s) between {uncovered[0]['start']} and "
+            f"{uncovered[-1]['end']} are not cached; pass --refresh to "
             "fetch them from Discord"
         )
 
@@ -171,5 +182,5 @@ def serve_read(
         "messages": messages,
         "complete": complete,
         "reason": reason,
-        "uncovered": [g.to_dict() for g in gaps],
+        "uncovered": uncovered,
     }
