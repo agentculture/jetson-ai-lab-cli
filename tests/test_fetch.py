@@ -44,7 +44,6 @@ from tests.test_discord import (
     _BackwardChannel,
     _FakeGuild,
     _FakeMsg,
-    _FakePerms,
     _FakeSeam,
     _window_msgs,
 )
@@ -100,9 +99,7 @@ def test_fetch_refuses_a_non_public_channel_before_any_history_call(
     col = _FakeCollection()
 
     with pytest.raises(CliError) as excinfo:
-        _fetch_mod.fetch_channel(
-            "42001", coverage_collection=_cov(col), message_collection=col
-        )
+        _fetch_mod.fetch_channel("42001", coverage_collection=_cov(col), message_collection=col)
 
     assert excinfo.value.code == EXIT_USER_ERROR
     assert chan.history_calls == []  # no history() call was ever issued
@@ -376,7 +373,10 @@ def test_a_non_advancing_channel_ends_in_a_partial_result_not_a_hang(
     assert "cursor" in result["incomplete"][0]["reason"]
     assert len(chan.history_calls) == 2  # page 1, then the non-advancing page 2 — no spin
     # What was read is still stored (a stall is not a reason to discard data).
-    assert len(_cache.fetch_messages("42013", collection=col)) == 200
+    # Page 2 is a byte-for-byte repeat of page 1 (the whole point of "stuck"),
+    # so the 200 raw reads collapse to 100 unique messages once _cache upserts
+    # by message id.
+    assert len(_cache.fetch_messages("42013", collection=col)) == 100
 
 
 # ---------------------------------------------------------------------------
@@ -462,9 +462,7 @@ def test_cli_fetch_accepts_until_and_max_messages(
     capsys.readouterr()
 
 
-def test_cli_fetch_rejects_a_malformed_until(
-    cli_env, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_fetch_rejects_a_malformed_until(cli_env, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["discord", "fetch", "42015", "--until", "not-a-date"])
     assert rc == 1
     err = capsys.readouterr().err

@@ -484,9 +484,7 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
 def _fetch_text(result: dict) -> str:
     head = "complete" if result["complete"] else "incomplete"
     lines = [f"{head}: channel {result['channel_id']}"]
-    lines.append(
-        f"cache: {result['stored']} messages stored ({result['suppressed']} suppressed)"
-    )
+    lines.append(f"cache: {result['stored']} messages stored ({result['suppressed']} suppressed)")
     lines.append(
         f"spans: {len(result['fetched'])} fetched, "
         f"{len(result['already_covered'])} already covered"
@@ -506,9 +504,7 @@ def cmd_discord_fetch(args: argparse.Namespace) -> int:
     for span in result["fetched"]:
         emit_diagnostic(f"fetched {span['start']}..{span['end']}")
     if not result["complete"]:
-        emit_diagnostic(
-            f"fetch incomplete: {len(result['uncovered'])} span(s) still uncovered"
-        )
+        emit_diagnostic(f"fetch incomplete: {len(result['uncovered'])} span(s) still uncovered")
     json_mode = bool(getattr(args, "json", False))
     if json_mode:
         emit_result(result, json_mode=True)
@@ -837,7 +833,10 @@ def register(sub: argparse._SubParsersAction) -> None:
     ft.add_argument(
         "--until",
         default=None,
-        help="Drain backward until messages predate this ISO-8601 date (default: the channel's beginning).",
+        help=(
+            "Drain backward until messages predate this ISO-8601 date "
+            "(default: the channel's beginning)."
+        ),
     )
     ft.add_argument(
         "--max-messages",
