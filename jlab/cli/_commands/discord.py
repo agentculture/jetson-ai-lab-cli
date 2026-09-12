@@ -477,7 +477,13 @@ def cmd_discord_doctor(args: argparse.Namespace) -> int:
     if json_mode:
         emit_result(result, json_mode=True)
     else:
-        emit_result(f"ok: guild {result['guild_id']}", json_mode=False)
+        cache = result.get("cache") or {}
+        lines = [f"ok: guild {result['guild_id']}"]
+        if cache.get("reachable"):
+            lines.append(
+                f"ok: jlab-mongodb cache reachable at {cache.get('host')}:{cache.get('port')}"
+            )
+        emit_result("\n".join(lines), json_mode=False)
     return 0
 
 

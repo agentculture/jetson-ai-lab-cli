@@ -71,6 +71,42 @@ Needs a **read-scoped** bot token in `DISCORD_BOT_TOKEN` and `discord-bot-cli`
 with its `[discord]` extra. Results are JSON on stdout; errors/diagnostics on
 stderr.
 
+### The jlab-mongodb cache
+
+The paged-read/search path (`jlab discord fetch`/`read`/`search`, still
+landing — see the plan) caches message history in a **dedicated** MongoDB
+instance, `jlab-mongodb`. It is deliberately its own container: this machine
+already runs two unrelated `mongod`s — `qq-mongodb` on port 27017 (a legacy
+instance) and `eidetic-mongo` on port 27018 (the shared eidetic memory store)
+— and jlab must never borrow either. `jlab discord doctor` fails at exit code
+2 if the configured instance is absent, unreachable, or turns out to be one
+of those two.
+
+```bash
+docker run -d --name jlab-mongodb \
+  -p 27019:27017 \
+  -v jlab-mongodb-data:/data/db \
+  mongo:8.0
+
+export JLAB_MONGO_URI="mongodb://127.0.0.1:27019/jlab"
+uv run jlab discord doctor                  # confirms the cache is reachable
+```
+
+Set `JLAB_MONGO_URI` from the environment — the same convention as
+`DISCORD_BOT_TOKEN` — and it must never resolve to port 27017 or 27018;
+`jlab` refuses to start against either.
+
+**Bind address and network posture, stated as a decision, not an
+oversight:** like the two existing containers on this machine,
+`jlab-mongodb` binds `0.0.0.0` (published as `27019:27017` above), so it is
+reachable from any interface this host has, not just loopback. That is
+accepted **only** because this deployment sits on a trusted internal
+network. It is not a hardening baseline — no TLS, no auth enforced by this
+setup — so moving `jlab-mongodb` onto a less trusted network (a shared VPC, a
+box with a public IP, anything outside the current internal network) is a
+real change of posture and needs its own review before it happens, not a
+silent inheritance of this setup.
+
 ### Member participation statistics (`jlab discord members`)
 
 ```bash

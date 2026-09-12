@@ -733,7 +733,78 @@ def test_guild_id_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_doctor_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
-    assert _discord.doctor(123) == {"ok": True, "guild_id": "123"}
+    cache_status = {"reachable": True, "host": "localhost", "port": 27019}
+    monkeypatch.setattr(_discord._mongo, "check_cache", lambda: cache_status)
+    assert _discord.doctor(123) == {
+        "ok": True,
+        "guild_id": "123",
+        "cache": cache_status,
+    }
+
+
+def test_doctor_propagates_unreachable_cache_as_env_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A down/absent jlab-mongodb fails `discord doctor` at code 2, not silently."""
+    guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    def _boom() -> None:
+        raise CliError(
+            code=2,
+            message="jlab-mongodb is unreachable at the configured URI: boom",
+            remediation="start the jlab-mongodb container and verify JLAB_MONGO_URI",
+        )
+
+    monkeypatch.setattr(_discord._mongo, "check_cache", _boom)
+    with pytest.raises(CliError) as exc:
+        _discord.doctor(123)
+    assert exc.value.code == 2
+    assert exc.value.remediation
+
+
+def test_discord_doctor_cli_exits_2_on_unreachable_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`jlab discord doctor` surfaces a down cache as a code-2 CLI error, never a traceback."""
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+
+    def _boom(guild_id: int) -> dict:
+        raise CliError(
+            code=2,
+            message="jlab-mongodb is unreachable at the configured URI: boom",
+            remediation="start the jlab-mongodb container and verify JLAB_MONGO_URI",
+        )
+
+    monkeypatch.setattr("jlab.cli._discord.doctor", _boom)
+    rc = main(["discord", "doctor"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_discord_doctor_text_reports_cache_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True, "host": "localhost", "port": 27019},
+        },
+    )
+    rc = main(["discord", "doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "jlab-mongodb" in out
+    assert "27019" in out
 
 
 # ---------------------------------------------------------------------------
