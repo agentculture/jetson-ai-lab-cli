@@ -5,7 +5,7 @@
   "schema_version": 5,
   "status": "exported",
   "created": "2026-09-12T16:48:39Z",
-  "updated": "2026-09-12T18:09:40Z",
+  "updated": "2026-09-12T20:34:30Z",
   "targets": [
     {
       "id": "c1",
@@ -964,6 +964,38 @@
     {
       "id": "r10",
       "text": "measured across waves 1-2: the associate review returned 'no concrete defects' on every task including two that carried real defects (t1) and read t3's diff as a proposal rather than shipped code. Its @file attachment silently returns empty output with exit 0, and sharper adversarial re-prompts time out at ~560s. Treat it as a weak second signal, never as a gate",
+      "kind": "unknown_nonblocking",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r11",
+      "text": "pre-existing flaky test, seen in three separate worktrees (t5, t12, and t12's own agent): tests/test_csv_export.py::test_escaped_csv_opens_as_inert_text_in_a_real_spreadsheet shells out to LibreOffice and fails roughly 1 run in 4 under pytest -n auto while passing in isolation. It predates this plan and touches none of its code, but a flake in the TDD gate trains the merging agent to wave failures through \u2014 it should be serialised or isolated, not ignored",
+      "kind": "follow_up",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r12",
+      "text": "CORRECTION to r5 and r10: every empty or timed-out associate review the main agent ran in this plan was caused by invoking 'pi -p' with an open stdin in a non-interactive shell \u2014 pi waits on stdin indefinitely and emits nothing, which is indistinguishable from a dead or overloaded reviewer. Diagnosed by probe: the endpoint answered a raw HTTP completion in 0.44s; the same trivial prompt through pi hung 90s with stdin open and returned in 2-5s with stdin closed (< /dev/null). The latency in r5 and the 'no concrete defects' unreliability in r10 are confounded by this bug and must not be read as properties of the associate model. Separately unverified: t3's report that an @file attachment returned empty output with exit 0, which is a different symptom (exit 0, not timeout)",
+      "kind": "follow_up",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r13",
+      "text": "associate-review prompts are steering the reviewer into false positives: the t4 review (thinking disabled, direct HTTP) returned two HIGH/MEDIUM 'defects' that are both false when checked against the code. (1) an 'infinite loop via a stall guard comparing against None' \u2014 in _drain_backward the cursor starts None, the first full page skips the guard and sets cursor=oldest, and every later page raises unless it advances, so no loop is reachable; it restated a hypothesis the main agent had written into the obligations as a 'known residual to probe'. (2) 'missing rate-limit backoff' \u2014 _collect_history carries _retry_after, _sleep, a retry cap and direction-aware resume cursors; the reviewer said it could not see that code. Consequences: review findings must be verified against the code before acting, and obligation prompts should state hypotheses neutrally ('confirm or refute from the diff, citing lines') rather than as leading residuals",
+      "kind": "follow_up",
+      "task_id": null,
+      "resolved": false,
+      "resolution": ""
+    },
+    {
+      "id": "r14",
+      "text": "the associate reviewer is a coding agent, not a text model: 'pi -p' runs with its built-in read, bash, edit and write tools enabled by default, and every review in this run was launched with the working directory inside the repository \u2014 a reviewer that decided to 'fix' what it found could have edited or committed to the code under review. Verified after the fact that it did not: git status is clean in the main repo and every worktree, and no commit on any branch came from it. The tool-enabled review demonstrably read files outside the diff (it quoted _collect_history), so tools do reach the repo. Mitigation: always pass --tools read,grep,find,ls (pi's documented read-only mode) or --no-tools for reviews",
       "kind": "unknown_nonblocking",
       "task_id": null,
       "resolved": false,
