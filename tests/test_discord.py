@@ -1012,7 +1012,7 @@ def test_discord_doctor_text_reports_encryption_as_measured(
                 "encrypted": True,
                 "measured": True,
                 "method": "store/fetch probe",
-                "algorithm": "HMAC-SHA256 keystream",
+                "algorithm": "AES-256-GCM",
                 "key_fingerprint": "deadbeef",
             },
         },
@@ -1021,7 +1021,7 @@ def test_discord_doctor_text_reports_encryption_as_measured(
     assert rc == 0
     out = capsys.readouterr().out
     assert "encryption measured" in out
-    assert "HMAC-SHA256 keystream" in out
+    assert "AES-256-GCM" in out
     assert "deadbeef" in out
 
 

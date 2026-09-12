@@ -60,7 +60,7 @@ KEY_ENV = "JLAB_CACHE_KEY"
 ENVELOPE_VERSION = 2
 
 #: Short human name of the construction, surfaced by ``doctor``.
-ALGORITHM = "HKDF-SHA256 + HMAC-SHA256 keystream (CTR), encrypt-then-MAC HMAC-SHA256"
+ALGORITHM = "AES-256-GCM (256-bit key via HKDF-SHA256 from JLAB_CACHE_KEY, 96-bit random nonce)"
 
 _HASH = hashlib.sha256
 _DIGEST_SIZE = _HASH().digest_size
@@ -71,8 +71,6 @@ _NONCE_BYTES = 12  # AES-GCM standard nonce size (NIST SP 800-38D)
 _MIN_KEY_CHARS = 32
 
 _HKDF_SALT = b"jlab-cache-v1"
-_INFO_ENC = b"jlab-cache-v1/content-encryption"
-_INFO_MAC = b"jlab-cache-v1/content-authentication"
 # Distinct HKDF label for the purge-suppression HMAC key: never the AES content
 # key, never the raw passphrase.
 _INFO_SUPPRESSION = b"jlab-cache-v2/author-suppression-hmac"

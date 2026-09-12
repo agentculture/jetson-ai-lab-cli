@@ -437,3 +437,18 @@ def test_claude_md_states_the_full_body_retention_position() -> None:
     # stated *beside* the two existing positions it deliberately departs from
     assert "no-content rule" in lower
     assert "url-only" in lower
+
+
+def test_algorithm_label_names_the_construction_actually_in_use() -> None:
+    """``doctor`` surfaces ``crypto.ALGORITHM``; it must describe the real cipher.
+
+    The label once outlived a construction change (HMAC-SHA256 keystream ->
+    AES-256-GCM) and kept reporting the old cipher through the encryption
+    measurement on the compliance path. Pin it to the envelope in use.
+    """
+    from jlab import crypto as crypto_module
+
+    assert crypto_module.ENVELOPE_VERSION == 2
+    assert "AES-256-GCM" in crypto_module.ALGORITHM
+    for stale in ("keystream", "CTR", "encrypt-then-MAC"):
+        assert stale not in crypto_module.ALGORITHM
