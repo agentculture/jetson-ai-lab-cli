@@ -139,6 +139,7 @@ private opt-in).
   — inspect cache coverage metadata.
 - `jetson-ai-lab-cli discord fetch <channel_id> [--until DATE] [--max-messages N]` —
   backward-page a public channel's missing history into the cache.
+- `jetson-ai-lab-cli discord sweep` — daily reconciliation of the cache with Discord.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -388,6 +389,39 @@ without the key the purge exits 2 before deleting anything. `--json` adds
     jetson-ai-lab-cli discord purge --older-than 365 --yes
 """
 
+_DISCORD_SWEEP = """\
+# jetson-ai-lab-cli discord sweep
+
+The daily reconciliation pass over the message cache — one idempotent run,
+meant for cron or a systemd timer (jlab builds no scheduler). For every
+channel with cache coverage, one channel at a time under that channel's lock:
+
+- **Visibility is re-verified live.** A channel that no longer exists, is
+  forbidden to the bot, has moved to another guild, or is no longer public
+  (the same `_channel_public` test `fetch` uses) has its cached content,
+  coverage and derived report runs purged. It is reported by id only. Any
+  other failure to re-verify purges nothing and marks the channel incomplete.
+- **Every covered span is re-read** from Discord. Edited messages are
+  rewritten so the cache keeps the latest version (suppressed authors are
+  never re-cached); messages Discord no longer has are deleted — **only**
+  inside a span re-read completely. A rate limit is waited out and resumed;
+  a span still cut short deletes nothing, is listed under `incomplete`, and
+  keeps its coverage so the next sweep retries it.
+- Leftover encryption-probe documents older than an hour are removed.
+
+Exits 2 before any Discord request when `JLAB_CACHE_KEY` or `JLAB_MONGO_URI`
+is missing. An incomplete sweep still exits 0 but reports `complete: false`,
+`incomplete_channels`, and each channel's incomplete spans (also on stderr).
+`--json` reports `totals` and, per channel, `updated`, `added`, `deleted`,
+`suppressed`, `purged`, `purge_reason`, `complete`, `incomplete` and `error`.
+The verb takes no target and no other flags.
+
+## Usage
+
+    jetson-ai-lab-cli discord sweep
+    jetson-ai-lab-cli discord sweep --json
+"""
+
 
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
@@ -411,6 +445,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "coverage"): _DISCORD_COVERAGE,
     ("discord", "fetch"): _DISCORD_FETCH,
     ("discord", "purge"): _DISCORD_PURGE,
+    ("discord", "sweep"): _DISCORD_SWEEP,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
 }

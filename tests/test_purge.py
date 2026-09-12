@@ -75,6 +75,12 @@ def _matches(doc: dict, flt: dict) -> bool:
                 if op == "$lt":
                     if got is None or not got < operand:
                         return False
+                elif op == "$gt":
+                    if got is None or not got > operand:
+                        return False
+                elif op == "$in":
+                    if got not in operand:
+                        return False
                 elif op == "$ne":
                     if got == operand:
                         return False

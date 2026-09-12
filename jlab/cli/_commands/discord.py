@@ -1,6 +1,6 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, links, fetch, purge, doctor, overview.
+Verbs: channels, read, active, members, links, fetch, purge, sweep, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
@@ -12,6 +12,7 @@ import argparse
 
 from jlab import fetch as _fetch_mod
 from jlab import purge as _purge_mod
+from jlab import sweep as _sweep_mod
 from jlab.cli import _discord
 from jlab.cli._commands import coverage as _coverage_cmd
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
@@ -576,6 +577,54 @@ def cmd_discord_purge(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- sweep -------------------------------------------------------------------
+
+
+def _sweep_text(result: dict) -> str:
+    head = "complete" if result["complete"] else "incomplete"
+    t = result["totals"]
+    lines = [
+        f"{head}: swept {result['channels_swept']} channel(s) — {t['updated']} updated, "
+        f"{t['added']} added, {t['deleted']} deleted, {t['purged']} purged"
+    ]
+    for row in result["channels"]:
+        cid = row["channel_id"]
+        if row["purged"]:
+            lines.append(
+                f"  channel {cid}: purged ({row['purge_reason']}), "
+                f"{row['deleted']} messages deleted"
+            )
+            continue
+        state = "complete" if row["complete"] else "incomplete"
+        lines.append(
+            f"  channel {cid}: {state}, {row['updated']} updated, {row['added']} added, "
+            f"{row['deleted']} deleted, {row['suppressed']} suppressed"
+        )
+        if row["error"]:
+            lines.append(f"    error: {row['error']}")
+        for span in row["incomplete"]:
+            lines.append(
+                f"    incomplete {span['start']}..{span['end']} (nothing deleted): {span['reason']}"
+            )
+    lines.append(f"probes reaped: {result['probes_reaped']}")
+    return "\n".join(lines)
+
+
+def cmd_discord_sweep(args: argparse.Namespace) -> int:
+    result = _sweep_mod.sweep()
+    if not result["complete"]:
+        emit_diagnostic(
+            "sweep incomplete: channel(s) "
+            + ", ".join(result["incomplete_channels"])
+            + " not fully reconciled; nothing was deleted in their incomplete spans"
+        )
+    if bool(getattr(args, "json", False)):
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_sweep_text(result), json_mode=False)
+    return 0
+
+
 # -- doctor -----------------------------------------------------------------
 
 
@@ -628,6 +677,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
                 "[--json] — delete from the cache and derived reports "
                 "(preview unless --yes)",
+                "sweep [--json] — daily reconciliation: re-verify visibility, "
+                "apply edits, remove deletions, purge channels no longer public",
                 "coverage [<channel_id>] [--since TS] [--until TS] — inspect "
                 "cache coverage metadata, never message content",
                 "doctor — verify token + guild readable, jlab-mongodb cache "
@@ -869,6 +920,14 @@ def register(sub: argparse._SubParsersAction) -> None:
     )
     pg.add_argument("--json", action="store_true", help=_JSON_HELP)
     pg.set_defaults(func=cmd_discord_purge, json=False, yes=False)
+
+    # sweep
+    sw = noun_sub.add_parser(
+        "sweep",
+        help="Reconcile the cache with Discord: edits, deletions, channels gone private.",
+    )
+    sw.add_argument("--json", action="store_true", help=_JSON_HELP)
+    sw.set_defaults(func=cmd_discord_sweep, json=False)
 
     # coverage
     _coverage_cmd.register(noun_sub)
