@@ -10,7 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Encrypted jlab-mongodb message cache (`jlab/cache.py`): message documents carrying `created_at` (Discord's), `updated_at` (Discord's edit timestamp, `null` when unedited) and `stored_at` (when jlab wrote the copy), upserted through `jlab.mongo.message_collection()`.
-- Application-level content encryption (`jlab/crypto.py`): HKDF-SHA256 sub-keys, an HMAC-SHA256 counter-mode keystream and encrypt-then-MAC authentication, keyed only from `JLAB_CACHE_KEY`. Standard library only — no new dependency. A missing, blank or under-32-character key raises `CliError(code=2)`; there is no plaintext fallback.
+- Application-level content encryption (`jlab/crypto.py`): AES-256-GCM via the `cryptography` package, which joins `discord-bot-cli` and `pymongo` on the approved-dependency list. The content key is derived from `JLAB_CACHE_KEY` with HKDF-SHA256 and each message gets a fresh 96-bit nonce. A missing, blank or under-32-character key raises `CliError(code=2)`; there is no plaintext fallback. (A hand-rolled stdlib construction was built first and replaced before release, as recorded in deviation d1.)
 - `jlab discord doctor` now **measures** cache encryption instead of assuming it: `jlab.cache.measure_encryption()` stores a marked probe through the real write path, reads the raw document back without decrypting, fails if the marker is found, and deletes the probe.
 - `edited_at` on serialized Discord messages, so an edit is detectable in the cache.
 

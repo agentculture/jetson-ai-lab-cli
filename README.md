@@ -105,10 +105,10 @@ unreadable (the fix is to re-fetch, not to recover).
 `jlab discord doctor` **measures** this rather than assuming it: it stores a
 marked probe through the real write path, reads the raw stored document back
 without decrypting, and fails if the marker is found in it. The construction is
-a standard-library composition (HKDF-SHA256, an HMAC-SHA256 counter-mode
-keystream, encrypt-then-MAC HMAC-SHA256) — sound, but not a standardised,
-independently reviewed AEAD, and with no key rotation; `jlab/crypto.py`'s
-docstring states the limits in full. Message *metadata* (channel id, author id,
+AES-256-GCM from the approved `cryptography` dependency, with the content key
+derived from `JLAB_CACHE_KEY` via HKDF-SHA256 and a fresh 96-bit nonce per
+message. It protects content at rest, not against anyone holding the key, and
+there is no key rotation; `jlab/crypto.py`'s docstring states the limits in full. Message *metadata* (channel id, author id,
 timestamps, jump URL) is stored in the clear on purpose so the cache stays
 queryable; only the body is encrypted.
 
