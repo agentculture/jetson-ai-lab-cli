@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-09-12
+
+### Added
+
+- Converged spec for `jlab discord fetch` / `search` / `read` — backward paging past the 100-message cap into a MongoDB cache, with regex search served from it (docs/specs/2026-09-12-jlab-discord-paged-read-regex-search.md).
+- Blind-spot challenge pass over the spec: interval-based cache coverage, daily reconciliation sweep, per-user deletion, encryption at rest, and a published privacy policy, recorded as 22 obligations.
+
+### Changed
+
+- Spec-only change — no runtime code touched. Records that pymongo is proposed as an approved runtime dependency and that this path retains full message bodies by decision, unlike the members and links paths.
+
 ## [0.7.0] - 2026-09-05
 
 ### Added
