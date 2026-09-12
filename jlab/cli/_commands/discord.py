@@ -73,11 +73,19 @@ def cmd_discord_channels(args: argparse.Namespace) -> int:
 def cmd_discord_read(args: argparse.Namespace) -> int:
     channel_id = _discord.parse_id(args.channel_id, "channel_id")
     limit = int(getattr(args, "limit", 20))
-    messages = _discord.read_messages(channel_id, limit=limit)
+    result = _discord.read_messages(channel_id, limit=limit)
+    messages = result["messages"]
+    complete = result["complete"]
     json_mode = bool(getattr(args, "json", False))
+    if not complete:
+        emit_diagnostic(f"read window not fully read: {result['reason']}")
     if json_mode:
         emit_result(
-            {"channel_id": str(channel_id), "messages": messages},
+            {
+                "channel_id": str(channel_id),
+                "messages": messages,
+                "complete": complete,
+            },
             json_mode=True,
         )
     else:
@@ -560,7 +568,7 @@ def register(sub: argparse._SubParsersAction) -> None:
         "--limit",
         type=int,
         default=20,
-        help="Messages to fetch (1-100, default 20).",
+        help="Messages to fetch (default 20; no upper bound, pages past 100).",
     )
     rd.add_argument("--json", action="store_true", help=_JSON_HELP)
     rd.set_defaults(func=cmd_discord_read, json=False)
