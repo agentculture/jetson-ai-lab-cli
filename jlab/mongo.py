@@ -45,6 +45,11 @@ _MONGO_URI_ENV = "JLAB_MONGO_URI"
 _DEFAULT_DB_NAME = "jlab"
 MESSAGES_COLLECTION = "messages"
 
+# Per-channel coverage intervals (see :mod:`jlab.coverage`). Kept in the same
+# database as the messages it describes, so wiping one wipes the other rather
+# than leaving coverage that claims messages which are gone.
+COVERAGE_COLLECTION = "coverage"
+
 # The two mongod containers this machine already runs, neither of which is
 # jlab's: qq-mongodb (legacy) on 27017, eidetic-mongo (memory store) on
 # 27018. jlab-mongodb must run on neither.
@@ -155,6 +160,29 @@ def _seam() -> Any:
 
 
 @contextmanager
+def _collection(name: str, uri: str | None) -> Iterator[Any]:
+    """Yield collection *name* from jlab-mongodb, closing the client afterwards.
+
+    The client is built with ``journal=True``: every acknowledged write has
+    reached the journal, so "the store call returned" is a durable-write
+    guarantee :mod:`jlab.coverage` can widen coverage on.
+    """
+    pymongo = _seam()
+    resolved_uri = _mongo_uri() if uri is None else uri
+    _reject_legacy_ports(resolved_uri)
+    client = pymongo.MongoClient(
+        resolved_uri,
+        serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS,
+        journal=True,
+    )
+    try:
+        database = client.get_default_database(default=_DEFAULT_DB_NAME)
+        yield database[name]
+    finally:
+        client.close()
+
+
+@contextmanager
 def message_collection(uri: str | None = None) -> Iterator[Any]:
     """Yield the cached-messages collection, closing the client afterwards.
 
@@ -163,17 +191,15 @@ def message_collection(uri: str | None = None) -> Iterator[Any]:
     :func:`_reject_legacy_ports`, so no caller can route around the
     dedicated-instance guard by opening its own client.
     """
-    pymongo = _seam()
-    resolved_uri = _mongo_uri() if uri is None else uri
-    _reject_legacy_ports(resolved_uri)
-    client = pymongo.MongoClient(
-        resolved_uri, serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS
-    )
-    try:
-        database = client.get_default_database(default=_DEFAULT_DB_NAME)
-        yield database[MESSAGES_COLLECTION]
-    finally:
-        client.close()
+    with _collection(MESSAGES_COLLECTION, uri) as col:
+        yield col
+
+
+@contextmanager
+def coverage_collection(uri: str | None = None) -> Iterator[Any]:
+    """Yield the per-channel coverage collection — same guards as the messages."""
+    with _collection(COVERAGE_COLLECTION, uri) as col:
+        yield col
 
 
 def check_cache(uri: str | None = None) -> dict[str, object]:
