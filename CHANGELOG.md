@@ -5,18 +5,6 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - 2026-09-13
-
-### Added
-
-- `jlab discord read --refresh`: the only path by which `read` now contacts Discord; it fetches missing history through the guarded `jlab.fetch.fetch_channel` path (guild + public check, gap-only fetch) and then serves from the cache.
-- `jlab discord read --json` gains an additive `uncovered` key (list of `{start,end}` gap intervals), present only when `complete` is `false`.
-
-### Changed
-
-- `jlab discord read` is now cache-served by default instead of live-by-default: on a covered window it returns the same messages in the same text/JSON shape as before; on an uncovered or partly covered window it reports the gap on stderr and points at `--refresh` instead of returning an empty result.
-- A cache-served read message never fabricates an author display name (the cache never stores one): `author.name`/`author.display_name` are `null`, and text mode falls back to the raw author id.
-
 ## [0.8.0] - 2026-09-12
 
 ### Added
@@ -25,11 +13,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Application-level content encryption (`jlab/crypto.py`): AES-256-GCM via the `cryptography` package, which joins `discord-bot-cli` and `pymongo` on the approved-dependency list. The content key is derived from `JLAB_CACHE_KEY` with HKDF-SHA256 and each message gets a fresh 96-bit nonce. A missing, blank or under-32-character key raises `CliError(code=2)`; there is no plaintext fallback. (A hand-rolled stdlib construction was built first and replaced before release, as recorded in deviation d1.)
 - `jlab discord doctor` now **measures** cache encryption instead of assuming it: `jlab.cache.measure_encryption()` stores a marked probe through the real write path, reads the raw document back without decrypting, fails if the marker is found, and deletes the probe.
 - `edited_at` on serialized Discord messages, so an edit is detectable in the cache.
+- `jlab discord read --refresh`: the only path by which `read` now contacts Discord. It live-re-reads the window `read` will serve (the most recent `--limit` messages), reconciles that span into the cache via `jlab.reconcile.reconcile_span` (also factored out of `jlab.sweep`) — edits and new messages stored, deletions and coverage widening applied only when the span was re-read completely — and then serves from the cache, so an edit or deletion inside an already-covered window surfaces, not just gaps.
+- `jlab discord read --json` gains an additive `uncovered` key (list of `{start,end}` gap intervals), present only when `complete` is `false`.
 
 ### Changed
 
 - `jlab discord read --json` now includes a `complete` field reporting whether the requested window was fully read. The change is additive: `channel_id` and `messages` are unchanged, and text-mode output is the same.
 - CLAUDE.md and README now state the retention position explicitly: this path retains **full message bodies by decision**, beside the `members` no-content rule and the `links` URL-only rule, together with the encryption obligation and the honest limits of the construction.
+- `jlab discord read` is now cache-served by default instead of live-by-default: on a covered window it returns the same messages in the same text/JSON shape as before; on an uncovered or partly covered window it reports the gap on stderr and points at `--refresh` instead of returning an empty result.
+- A cache-served read message never fabricates an author display name (the cache never stores one): `author.name`/`author.display_name` are `null`, and text mode falls back to the raw author id.
 
 ## [0.7.1] - 2026-09-12
 

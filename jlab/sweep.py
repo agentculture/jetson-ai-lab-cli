@@ -67,6 +67,7 @@ from jlab import coverage as _coverage
 from jlab import crypto as _crypto
 from jlab import mongo as _mongo
 from jlab import purge as _purge
+from jlab import reconcile as _reconcile
 from jlab.cli import _discord
 
 UTC = dt.timezone.utc
@@ -86,15 +87,6 @@ def _status(exc: BaseException) -> int | None:
         return int(status) if status is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _changed(cached: dict[str, Any], live: dict[str, Any]) -> bool:
-    """Whether Discord's copy differs from the cached one (body or edit stamp)."""
-    if (cached.get("content") or "") != (live.get("content") or ""):
-        return True
-    return _cache._parse_timestamp(cached.get("updated_at")) != _cache._parse_timestamp(
-        live.get("edited_at")
-    )
 
 
 def _new_row(channel_id: str) -> dict[str, Any]:
@@ -211,39 +203,23 @@ class _Sweeper:
         except Exception as exc:  # noqa: BLE001
             raw, complete, reason = [], False, f"read failed: {exc}"
 
-        live: dict[str, dict[str, Any]] = {}
-        for message in raw:
-            serialized = _discord._serialize_message(message, channel)
-            if serialized.get("id") is not None:
-                live[serialized["id"]] = serialized
-        cached = {
-            m["message_id"]: m
-            for m in _cache.messages_between(channel_id, span.start, span.end, collection=self.col)
-        }
-
-        edited = [m for mid, m in live.items() if mid in cached and _changed(cached[mid], m)]
-        added = [m for mid, m in live.items() if mid not in cached]
-        for batch, field in ((edited, "updated"), (added, "added")):
-            if batch:
-                stored = _cache.store_messages(
-                    channel_id, batch, collection=self.col, suppression=self.suppression
-                )
-                row[field] += int(stored["stored"])
-                row["suppressed"] += int(stored.get("suppressed", 0))
-
-        if not complete:
-            row["complete"] = False
-            row["incomplete"].append({**span.to_dict(), "reason": reason})
-            return  # a partial re-read proves nothing about what is absent
-
-        live_stamps = {_cache._parse_timestamp(m.get("created_at")) for m in live.values()}
-        doomed = sorted(
-            mid
-            for mid, m in cached.items()
-            if mid not in live and _cache._parse_timestamp(m.get("created_at")) not in live_stamps
+        live_messages = [_discord._serialize_message(m, channel) for m in raw]
+        result = _reconcile.reconcile_span(
+            channel_id,
+            span,
+            live_messages,
+            complete=complete,
+            reason=reason,
+            collection=self.col,
+            suppression=self.suppression,
         )
-        removed = _cache.delete_message_ids(channel_id, doomed, collection=self.col)
-        row["deleted"] += removed["deleted"]
+        row["updated"] += result["updated"]
+        row["added"] += result["added"]
+        row["deleted"] += result["deleted"]
+        row["suppressed"] += result["suppressed"]
+        if not result["complete"]:
+            row["complete"] = False
+            row["incomplete"].append({**span.to_dict(), "reason": result["reason"]})
 
 
 def _summarise(

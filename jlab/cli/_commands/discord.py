@@ -756,9 +756,9 @@ def register(sub: argparse._SubParsersAction) -> None:
         "--refresh",
         action="store_true",
         help=(
-            "Fetch missing history from Discord first (via `discord fetch`'s "
-            "guarded path), then serve from the cache. The only way `read` "
-            "contacts Discord."
+            "Live re-read the window this call will serve, reconcile edits/"
+            "deletions into the cache, then serve from it. The only way "
+            "`read` contacts Discord."
         ),
     )
     rd.add_argument("--json", action="store_true", help=_JSON_HELP)

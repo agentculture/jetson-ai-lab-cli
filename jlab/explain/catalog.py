@@ -181,11 +181,16 @@ on an uncovered or partly covered window it reports the gap on stderr (plus
 `complete: false` and an additive `uncovered` list in --json) instead of
 returning an empty result that reads as "no messages".
 
-**--refresh is the only path that reaches Discord.** It fetches only what is
-missing (via the same guarded path `discord fetch` uses — guild + public
-check before any history read) and then serves from the cache, so the shape
-of the result is identical either way. A private or another guild's channel
-is refused (exit 1) before any Discord read, leaking no name or content.
+**--refresh is the only path that reaches Discord.** It is a live RE-read —
+not a gap-only fetch — of the window this call will serve (the most recent
+*limit* messages), so an edit or a deletion Discord already has, even inside
+an already-cached window, surfaces. That live read is reconciled into the
+cache (edits and new messages stored; a cached message Discord no longer has
+is deleted, and coverage widened, only when the re-read was complete) before
+serving from the cache, so the shape of the result is identical either way.
+Guild + public checks run before any history read (the same guards `discord
+fetch` uses); a private or another guild's channel is refused (exit 1)
+before any Discord read, leaking no name or content.
 
 Because the cache never stores a resolved author display name, a
 cache-served message's `author.name`/`author.display_name` are `None`

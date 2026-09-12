@@ -1,8 +1,11 @@
 """Tests for ``jlab.read`` and the cache-served ``discord read`` verb (t9).
 
 No network and no real Mongo: the Discord seam is a fake reused from
-tests/test_discord.py, and the Mongo collections are the fake-pymongo
-stand-ins from tests/test_cache.py, exactly as tests/test_fetch.py does.
+tests/test_discord.py, and the Mongo collection is tests/test_purge.py's
+fake-pymongo stand-in (it understands the ``$gt``/``$lt`` operators
+``jlab.cache.messages_between`` — used by the ``--refresh`` reconcile path —
+needs; the plainer tests/test_cache.py fake only matches on equality), the
+same fake tests/test_sweep.py uses for exactly that reason.
 
 Acceptance criteria under test (docs/plans/2026-09-12-...:84-91, t9):
 
@@ -11,10 +14,13 @@ Acceptance criteria under test (docs/plans/2026-09-12-...:84-91, t9):
         gap (stderr + ``complete: false`` + ``uncovered`` in --json) rather
         than returning an empty result.
 * o22 — ``--refresh`` is the ONLY path by which ``read`` contacts Discord: a
-        seam that raises on any call must not be touched without it, and with
-        it the live re-read is routed through ``jlab.fetch.fetch_channel``
-        (guild + public check, gap-only fetch); a private/other-guild channel
-        exits 1 and leaks no name or content.
+        seam that raises on any call must not be touched without it. With it,
+        the window ``read`` will serve is live RE-read (not a gap-only
+        fetch — an edit or deletion inside an already-covered window must
+        surface), reconciled into the cache via ``jlab.reconcile`` (the same
+        span-reconcile logic ``jlab.sweep`` uses), and only THEN served from
+        the cache; a private/other-guild channel exits 1 and leaks no name or
+        content, via the same guards ``jlab.fetch.fetch_channel`` uses.
 """
 
 from __future__ import annotations
@@ -32,13 +38,13 @@ from jlab import mongo as _mongo
 from jlab import read as _read_mod
 from jlab.cli import _discord, main
 from jlab.cli._errors import EXIT_USER_ERROR, CliError
-from tests.test_cache import _FakeCollection
 from tests.test_discord import (
     _BackwardChannel,
     _FakeGuild,
     _FakeSeam,
     _window_msgs,
 )
+from tests.test_purge import _FakeCollection
 
 UTC = dt.timezone.utc
 _KEY_ENV = "JLAB_CACHE_KEY"
@@ -271,6 +277,246 @@ def test_refresh_routes_through_fetch_channel_then_serves_from_cache(
     assert len(result["messages"]) == 4
     assert chan.history_calls  # the guarded live path actually ran
     assert len(_cache.fetch_messages("50006", collection=col)) == 4
+
+
+def test_refresh_applies_an_edit_inside_an_already_covered_window(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """--refresh is a live RE-read, not a gap-only fetch: an edit Discord
+    already has, inside a span the cache already holds, must surface."""
+    col = _FakeCollection()
+    msgs = _window_msgs(3)
+    now = dt.datetime.now(UTC)
+
+    # Seed the cache with the ORIGINAL content, as if a prior fetch cached it.
+    _cache.store_messages(
+        "60001",
+        [
+            {
+                "id": m.id,
+                "author": {"id": f"{m.id}a", "bot": False},
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in msgs
+        ],
+        collection=col,
+    )
+    assert [d["content"] for d in _cache.fetch_messages("60001", collection=col)] == [
+        "m0",
+        "m1",
+        "m2",
+    ]
+
+    # Discord's live copy has since been edited.
+    msgs[1].content = "EDITED CONTENT"
+    chan = _BackwardChannel("60001", "general", msgs, public=True)
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "60001",
+        limit=3,
+        refresh=True,
+        now=now,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is True
+    assert "EDITED CONTENT" in [m["content"] for m in result["messages"]]
+    assert "EDITED CONTENT" in [
+        d["content"] for d in _cache.fetch_messages("60001", collection=col)
+    ]
+
+
+def test_refresh_removes_a_message_deleted_on_discord(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """A message the cache holds but Discord no longer returns is deleted,
+    once the span containing it was re-read completely."""
+    col = _FakeCollection()
+    msgs = _window_msgs(3)
+    now = dt.datetime.now(UTC)
+
+    _cache.store_messages(
+        "60002",
+        [
+            {
+                "id": m.id,
+                "author": {"id": f"{m.id}a", "bot": False},
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in msgs
+        ],
+        collection=col,
+    )
+
+    deleted = msgs.pop(1)  # "deleted on Discord": no longer in the live channel
+    chan = _BackwardChannel("60002", "general", msgs, public=True)
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "60002",
+        limit=3,
+        refresh=True,
+        now=now,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is True
+    remaining_ids = {d["message_id"] for d in _cache.fetch_messages("60002", collection=col)}
+    assert deleted.id not in remaining_ids
+    assert deleted.id not in [m["id"] for m in result["messages"]]
+
+
+def test_refresh_incomplete_reread_deletes_nothing_and_reports_incomplete(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """A rate-limited/failed re-read deletes nothing and is reported incomplete."""
+
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    col = _FakeCollection()
+    msgs = _window_msgs(250)
+    now = dt.datetime.now(UTC)
+
+    # Seed the cache with all 250, as if fully fetched previously — coverage
+    # is deliberately left empty so this refresh attempt is the only thing
+    # that could ever mark the window complete.
+    _cache.store_messages(
+        "60003",
+        [
+            {
+                "id": m.id,
+                "author": {"id": f"{m.id}a", "bot": False},
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in msgs
+        ],
+        collection=col,
+    )
+    assert len(_cache.fetch_messages("60003", collection=col)) == 250
+
+    # This message is cached, but "gone from Discord" by the time the live
+    # channel below is built (near the newest end, so it would have fallen
+    # inside the FIRST, successfully-read 100-message page) — proving
+    # deletion really was skipped, not merely never attempted.
+    vanished = msgs.pop(240)
+    assert len(msgs) == 249
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("60003", "deep", msgs, public=True)
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "60003",
+        limit=250,
+        refresh=True,
+        now=now,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is False
+    # nothing was deleted, including `vanished` — cached, absent from the
+    # live channel, and inside the one page that WAS fully read — because
+    # the re-read as a whole did not complete
+    cached_ids = {d["message_id"] for d in _cache.fetch_messages("60003", collection=col)}
+    assert len(cached_ids) == 250
+    assert vanished.id in cached_ids
+
+
+def test_refresh_does_not_widen_coverage_for_an_incomplete_span(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """An incomplete re-read must not make the window look covered afterwards.
+
+    Coverage starts empty; the cache is seeded with EXACTLY the 100 messages
+    a boomed-on-page-two re-read will re-confirm, and ``read``'s own limit
+    matches that count, so the final gap-check window is exactly the
+    reconciled span. If that span were wrongly widened despite the read
+    being incomplete, this call's own ``complete`` would flip to ``True``.
+    """
+
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    col = _FakeCollection()
+    full_history = _window_msgs(150)  # more than one page (page_cap=100)
+    now = dt.datetime.now(UTC)
+    newest_100 = full_history[-100:]  # what a boomed-on-page-2 drain returns
+
+    _cache.store_messages(
+        "60004",
+        [
+            {
+                "id": m.id,
+                "author": {"id": f"{m.id}a", "bot": False},
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in newest_100
+        ],
+        collection=col,
+    )
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("60004", "deep", full_history, public=True)
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "60004",
+        limit=200,
+        refresh=True,
+        now=now,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is False
+    assert _coverage.read_coverage("60004", collection=_cov(col)) == []
 
 
 def test_refresh_refuses_a_non_public_channel_before_any_history_call(

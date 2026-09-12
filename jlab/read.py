@@ -9,12 +9,20 @@ path by which it touches Discord:
   that reaches the Discord seam — it reads :mod:`jlab.cache` and
   :mod:`jlab.coverage` only, so a caller can tell from the command line alone
   whether the network was touched (o22);
-* with ``--refresh``, the live re-read is routed through the ONE guarded live
-  path, :func:`jlab.fetch.fetch_channel` — guild + public check, gap-only
-  fetch, coverage widening — never a re-implementation of that check here.
-  Even with ``--refresh`` the result is still SERVED from the cache
-  afterwards, not returned straight from the fetch, so the message shape is
-  identical whichever path filled the cache.
+* with ``--refresh``, "forces a live re-read from Discord when something may
+  have been added or changed" (the spec's own words) — not a gap-only fetch.
+  An edit or a deletion inside an already-covered window would never surface
+  through :func:`jlab.fetch.fetch_channel` (it only requests what coverage
+  says is missing), so ``--refresh`` instead: (a) reuses
+  :func:`jlab.fetch.preflight` and :func:`jlab.fetch.validated_channel` — the
+  same preflight/guild/public guards ``fetch`` uses, never copied; (b) live-
+  reads the window ``read`` will serve (the most recent *limit* messages,
+  back to the oldest one returned); (c)/(d)/(e) reconciles that span through
+  :func:`jlab.reconcile.reconcile_span` — the exact same store/delete/widen
+  rules :mod:`jlab.sweep` applies per span, factored into one shared
+  function so this is not a second copy of that logic; (f) then serves from
+  the cache, same as the no-flag path, so the message shape is identical
+  whichever path filled the cache.
 
 **Why the returned messages are not byte-identical to the old live shape.**
 :mod:`jlab.cache`'s documented schema deliberately never stores an author's
@@ -53,6 +61,7 @@ from typing import Any
 
 from jlab import cache as _cache
 from jlab import coverage as _coverage
+from jlab import reconcile as _reconcile
 from jlab.cli import _discord
 from jlab.cli._errors import EXIT_USER_ERROR, CliError
 
@@ -87,6 +96,85 @@ def _to_message_shape(doc: dict[str, Any], channel_id: str) -> dict[str, Any]:
     }
 
 
+def _live_reread_and_reconcile(
+    channel_id: int,
+    *,
+    limit: int,
+    guild_id: int | None,
+    started: dt.datetime,
+    blocking: bool,
+    coverage_collection: Any,
+    message_collection: Any,
+    suppression: Any,
+) -> None:
+    """``--refresh``'s live re-read: fills/corrects the cache, never returns it.
+
+    Live-reads the most recent *limit* messages (backward, past the
+    100-per-request cap exactly like the old live ``read`` did), reconciles
+    that span into the cache via :mod:`jlab.reconcile` (edits and new
+    messages stored; deletions and coverage widening only when the re-read
+    was complete), then returns — :func:`serve_read` does the actual serving
+    afterwards. The whole thing runs under the channel's own lock, the same
+    guard :func:`jlab.coverage.fetch_missing` and :mod:`jlab.sweep` use, so a
+    concurrent fetch/sweep of this channel is serialised rather than racing.
+    """
+    # Imported here, not at module scope, and only reachable via this
+    # function — see serve_read's docstring for why that matters (o22).
+    from jlab import fetch as _fetch_mod
+
+    gid = guild_id if guild_id is not None else _discord._guild_id()
+    _fetch_mod.preflight(message_collection)
+
+    async def action(client: Any) -> tuple[list[dict[str, Any]], bool, str | None]:
+        channel = await _fetch_mod.validated_channel(client, channel_id, gid)
+        raw, complete, reason = await _discord._collect_history(
+            channel,
+            limit=limit,
+            after=None,
+            before=None,
+            backward=True,
+            max_messages=None,
+        )
+        return (
+            [_discord._serialize_message(m, channel) for m in raw],
+            complete,
+            reason,
+        )
+
+    with _coverage.channel_lock(str(channel_id), blocking=blocking):
+        live_messages, complete, reason = _discord._run(action)
+
+        if live_messages:
+            span_start = min(_cache._parse_timestamp(m.get("created_at")) for m in live_messages)
+        elif complete:
+            # A complete drain that found nothing: the channel genuinely has
+            # no messages at all, so the whole history is the reconciled span.
+            from jlab.fetch import DISCORD_EPOCH
+
+            span_start = DISCORD_EPOCH
+        else:
+            # Nothing usable was read (e.g. rate-limited before a single
+            # message came back) — no span to reconcile or widen; the
+            # channel's coverage is untouched, so the normal gap-reporting
+            # path below still reports this honestly.
+            return
+
+        span = _coverage.Interval(span_start, started)
+        result = _reconcile.reconcile_span(
+            str(channel_id),
+            span,
+            live_messages,
+            complete=complete,
+            reason=reason,
+            collection=message_collection,
+            suppression=suppression,
+        )
+        if result["complete"]:
+            _coverage.widen_coverage(
+                str(channel_id), span, collection=coverage_collection, now=started
+            )
+
+
 def serve_read(
     channel_id_raw: str,
     *,
@@ -101,11 +189,17 @@ def serve_read(
 ) -> dict[str, Any]:
     """Serve up to *limit* of a channel's most recent cached messages.
 
-    *refresh* is the only flag that reaches Discord (via
-    :func:`jlab.fetch.fetch_channel`, imported lazily below so importing this
-    module — and every cache-only call through it — never even names the
-    fetch module, let alone the Discord seam it wraps). Returns
-    ``{"channel_id", "messages", "complete", "reason", "uncovered"}``:
+    *refresh* is the only flag that reaches Discord: a live re-read of the
+    window this call will serve, reconciled into the cache, THEN served from
+    it — never a shortcut that returns the live read directly (see the
+    module docstring for why a gap-only fetch is not enough here, and why
+    this shares :mod:`jlab.reconcile` with :mod:`jlab.sweep` instead of
+    re-implementing it). :mod:`jlab.fetch` (and the Discord seam it wraps) is
+    imported lazily, only inside this branch, so no cache-only call path
+    through this module ever even names it — o22's "a seam that raises on
+    any call must not be touched" holds literally, not just behaviourally.
+
+    Returns ``{"channel_id", "messages", "complete", "reason", "uncovered"}``:
     ``reason``/``uncovered`` are ``None``/``[]`` when *complete* is ``True``.
     """
     if limit < 1:
@@ -119,18 +213,12 @@ def serve_read(
     started = now or dt.datetime.now(UTC)
 
     if refresh:
-        # Imported here, not at module scope: no cache-only call path through
-        # this module ever imports jlab.fetch (or the Discord seam it wraps),
-        # which is what lets o22's "a seam that raises on any call must not
-        # be touched" hold literally, not just behaviourally.
-        from jlab import fetch as _fetch_mod
-
-        _fetch_mod.fetch_channel(
-            str(channel_id),
+        _live_reread_and_reconcile(
+            channel_id,
+            limit=limit,
             guild_id=guild_id,
-            max_messages=None,
+            started=started,
             blocking=blocking,
-            now=started,
             coverage_collection=coverage_collection,
             message_collection=message_collection,
             suppression=suppression,
