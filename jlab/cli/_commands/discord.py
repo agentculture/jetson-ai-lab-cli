@@ -15,6 +15,7 @@ from jlab import purge as _purge_mod
 from jlab import sweep as _sweep_mod
 from jlab.cli import _discord
 from jlab.cli._commands import coverage as _coverage_cmd
+from jlab.cli._commands import search as _search_cmd
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
 from jlab.links import cache as _links_cache_mod
@@ -674,6 +675,9 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "HTML report and CSVs",
                 "fetch <channel_id> [--until DATE] [--max-messages N] [--json] "
                 "— backward-page a public channel's missing history into the cache",
+                "search <channel_id> --grep PATTERN [--since TS --until TS] "
+                "[--max-matches N] [--timeout SECS] [--json] — regex search "
+                "the cached corpus (cache-served only, never contacts Discord)",
                 "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
                 "[--json] — delete from the cache and derived reports "
                 "(preview unless --yes)",
@@ -931,6 +935,9 @@ def register(sub: argparse._SubParsersAction) -> None:
 
     # coverage
     _coverage_cmd.register(noun_sub)
+
+    # search
+    _search_cmd.register(noun_sub)
 
     # doctor
     dr = noun_sub.add_parser(

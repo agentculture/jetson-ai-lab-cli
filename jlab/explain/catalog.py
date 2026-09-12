@@ -140,6 +140,9 @@ private opt-in).
 - `jetson-ai-lab-cli discord fetch <channel_id> [--until DATE] [--max-messages N]` —
   backward-page a public channel's missing history into the cache.
 - `jetson-ai-lab-cli discord sweep` — daily reconciliation of the cache with Discord.
+- `jetson-ai-lab-cli discord search <channel_id> --grep PATTERN [--since --until]
+  [--max-matches N] [--timeout SECS]` — regex search over the cached corpus
+  (cache-served only, never contacts Discord).
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -347,6 +350,49 @@ presenting a partial drain as complete.
     jetson-ai-lab-cli discord fetch 1234567890 --json
 """
 
+_DISCORD_SEARCH = """\
+# jetson-ai-lab-cli discord search <channel_id> --grep PATTERN
+
+Regex-search a channel's cached corpus. **Cache-served only** — this verb
+never opens a Discord session; it answers from whatever `discord fetch` has
+already written and points at `fetch` for gaps rather than reaching for the
+network itself.
+
+`--grep` is compiled up front, before any cache is opened: a malformed
+pattern exits 1 (`error:`/`hint:`, no traceback) before Mongo is ever touched.
+
+`--since`/`--until` (ISO-8601) bound the search window — both or neither; a
+lone bound exits 1. With neither given, the window defaults to the channel's
+whole possible history (Discord's epoch through now), the same default
+`discord fetch` drains to. The result always reports `complete` and
+`uncovered` from the recorded cache coverage: a channel with no coverage at
+all comes back `complete: false` with the whole window listed as uncovered,
+never as a bare "no matches".
+
+**Execution bound.** A well-formed but pathological pattern (catastrophic
+backtracking, e.g. `(a+)+$` against a long run of `a`s) cannot be interrupted
+by Python's `re` once running, so matching happens in a forked child process
+under a wall-clock `--timeout` (seconds; declared, sane default). If the
+bound fires before matching finishes, the result carries `bounded: true` and
+a diagnostic — never an empty result that reads as "no matches"; whatever
+matched before the cutoff is still returned. `--max-matches N` stops the scan
+early and reports `truncated: true`, which is a distinct condition from
+`bounded`.
+
+Output per match: message id, `created_at`, the author id exactly as the
+cache stored it (the cache never stores a display name, so no name
+resolution — and none is attempted, since that would mean a live Discord
+call), `jump_url`, and `content`.
+
+## Usage
+
+    jetson-ai-lab-cli discord search 1234567890 --grep "September"
+    jetson-ai-lab-cli discord search 1234567890 --grep "error" \\
+      --since 2026-09-01T00:00:00+00:00 --until 2026-09-15T00:00:00+00:00
+    jetson-ai-lab-cli discord search 1234567890 --grep "foo" --max-matches 20
+    jetson-ai-lab-cli discord search 1234567890 --grep "foo" --timeout 2 --json
+"""
+
 _DISCORD_PURGE = """\
 # jetson-ai-lab-cli discord purge
 
@@ -444,6 +490,7 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "links"): _DISCORD_LINKS,
     ("discord", "coverage"): _DISCORD_COVERAGE,
     ("discord", "fetch"): _DISCORD_FETCH,
+    ("discord", "search"): _DISCORD_SEARCH,
     ("discord", "purge"): _DISCORD_PURGE,
     ("discord", "sweep"): _DISCORD_SWEEP,
     ("discord", "doctor"): _DISCORD_DOCTOR,
