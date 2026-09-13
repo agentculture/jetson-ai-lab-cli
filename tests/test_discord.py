@@ -174,29 +174,33 @@ def test_discord_read_json(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """t9: read is cache-served by default — the CLI now calls jlab.read.serve_read."""
     canned = [
         {
             "id": "msg1",
-            "author": {"id": "a1", "name": "alice"},
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
             "content": "hello",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     ]
     monkeypatch.setattr(
-        "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: {"messages": canned, "complete": True, "reason": None},
-    )
-    monkeypatch.setattr(
-        "jlab.cli._discord.parse_id",
-        lambda value, label: int(value),
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "123",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
     )
     rc = main(["discord", "read", "123", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["channel_id"] == "123"
     assert len(payload["messages"]) == 1
-    assert payload["messages"][0]["author"]["name"] == "alice"
+    assert payload["messages"][0]["content"] == "hello"
     assert payload["complete"] is True
+    assert set(payload) == {"channel_id", "messages", "complete"}  # additive uncovered key omitted
 
 
 def test_discord_read_text(
@@ -206,23 +210,26 @@ def test_discord_read_text(
     canned = [
         {
             "id": "msg1",
-            "author": {"id": "a1", "name": "bob"},
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
             "content": "world",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     ]
     monkeypatch.setattr(
-        "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: {"messages": canned, "complete": True, "reason": None},
-    )
-    monkeypatch.setattr(
-        "jlab.cli._discord.parse_id",
-        lambda value, label: int(value),
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "456",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
     )
     rc = main(["discord", "read", "456"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "bob" in out
+    # No resolved name in the cache: text mode falls back to the raw author id.
+    assert "a1" in out
     assert "world" in out
 
 
@@ -234,28 +241,29 @@ def test_discord_read_incomplete_reports_gap_on_stderr(
     canned = [
         {
             "id": "msg1",
-            "author": {"id": "a1", "name": "bob"},
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
             "content": "world",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     ]
     monkeypatch.setattr(
-        "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: {
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "456",
             "messages": canned,
             "complete": False,
             "reason": "rate limited: retries exhausted",
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
         },
-    )
-    monkeypatch.setattr(
-        "jlab.cli._discord.parse_id",
-        lambda value, label: int(value),
     )
     rc = main(["discord", "read", "456", "--json"])
     assert rc == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert payload["complete"] is False
+    assert payload["uncovered"]  # additive: present only when incomplete
     assert "rate limited" in captured.err
 
 
@@ -771,31 +779,65 @@ def _two_message_channel() -> "_FakeChannel":
     )
 
 
+def _canned_cache_messages() -> list[dict]:
+    now = "2026-09-01T12:00:00+00:00"
+    return [
+        {
+            "id": "m0",
+            "author": {"id": "m0a", "name": None, "display_name": None, "bot": False},
+            "content": "hello",
+            "created_at": now,
+            "edited_at": None,
+            "channel": {"id": "999"},
+            "jump_url": None,
+            "attachments": [],
+            "embeds": [],
+            "thread": {},
+        },
+        {
+            "id": "m1",
+            "author": {"id": "m1a", "name": None, "display_name": None, "bot": False},
+            "content": "world",
+            "created_at": now,
+            "edited_at": None,
+            "channel": {"id": "999"},
+            "jump_url": None,
+            "attachments": [],
+            "embeds": [],
+            "thread": {},
+        },
+    ]
+
+
 def test_read_default_limit_text_lines_are_the_same_messages_in_the_same_format(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """With no new flag, text mode prints exactly one ``[ts] author: content`` line per message.
-
-    Was ``..._byte_identical_to_a_single_page``, which asserted only substrings and
-    never exercised --json; this pins the exact lines (timestamps taken from the
-    same fake's --json output) so a format change fails.
+    """t9: read is cache-served by default; text mode still prints one
+    ``[ts] author: content`` line per message. Since the cache never stores a
+    resolved display name, the id stands in for ``author`` — this pins the
+    exact lines so a format change fails.
     """
-    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+    canned = _canned_cache_messages()
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
+    )
 
-    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
-    assert main(["discord", "read", "999", "--json"]) == 0
-    stamps = [m["created_at"] for m in json.loads(capsys.readouterr().out)["messages"]]
-
-    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
     rc = main(["discord", "read", "999"])
 
     assert rc == 0
     captured = capsys.readouterr()
     assert captured.err == ""  # complete: nothing diagnostic to report
     assert captured.out.strip("\n").split("\n") == [
-        f"[{stamps[0]}] ann: hello",
-        f"[{stamps[1]}] bob: world",
+        "[2026-09-01T12:00:00+00:00] m0a: hello",
+        "[2026-09-01T12:00:00+00:00] m1a: world",
     ]
 
 
@@ -804,8 +846,17 @@ def test_read_json_adds_complete_as_an_additive_field(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """--json keeps ``channel_id`` and ``messages`` and adds ``complete`` (t4, recorded as r17)."""
-    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=_two_message_channel()))
-    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+    canned = _canned_cache_messages()
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
+    )
 
     assert main(["discord", "read", "999", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -881,34 +932,26 @@ def test_discord_read_cli_reports_incomplete_on_stderr_not_silent_truncation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """o5 at the CLI boundary: the verb surfaces the gap, not an empty/quiet result."""
+    """o5/o21 at the CLI boundary: the verb surfaces the gap, not an empty/quiet result.
 
-    async def _fake_sleep(seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
-
-    class _BoomOnPageTwo(_BackwardChannel):
-        def history(self, limit=None, after=None, before=None):
-            self.history_calls.append({"limit": limit, "after": after, "before": before})
-            if len(self.history_calls) == 2:
-
-                async def _boom():
-                    raise RuntimeError("connection reset")
-                    yield  # pragma: no cover
-
-                return _boom()
-            page = self._page(limit, after, before)
-
-            async def _gen():
-                for m in page:
-                    yield m
-
-            return _gen()
-
-    chan = _BoomOnPageTwo("c1", "deep", _window_msgs(250))
-    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    monkeypatch.setattr(_discord, "parse_id", lambda value, label: int(value))
+    Previously this drove a mid-drain failure through the live seam; ``read``
+    is cache-served now, so the CLI-boundary contract (partial messages kept,
+    stderr names the gap, no ``error:`` prefix) is exercised against
+    ``jlab.read.serve_read`` directly instead.
+    """
+    canned = _canned_cache_messages()[:1]  # what WAS read, not silently dropped
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": False,
+            "reason": "read failed after 1 messages: connection reset",
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
+        },
+    )
 
     rc = main(["discord", "read", "999", "--limit", "250", "--json"])
 
@@ -916,7 +959,8 @@ def test_discord_read_cli_reports_incomplete_on_stderr_not_silent_truncation(
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert payload["complete"] is False
-    assert len(payload["messages"]) == 100  # what WAS read, not silently dropped
+    assert len(payload["messages"]) == 1  # what WAS read, not silently dropped
+    assert payload["uncovered"]
     assert "error:" not in captured.err  # not a hard failure, still a reported gap
     assert "connection reset" in captured.err
 

@@ -174,7 +174,12 @@ not, and they are load-bearing:
   wrote the copy) — so edits are detectable and the age of the local copy is
   always known. Metadata (channel id, author id, timestamps, jump URL) is
   stored in the clear on purpose so the cache stays queryable; only the body
-  is encrypted.
+  and, per deviation d4 below, the author's name and display name are
+  encrypted.
+- **Author names are stored, encrypted (deviation d4).** `author_name` and
+  `author_display_name` are stored beside the body, each its own encrypted
+  envelope, so a paged read or search can show who said something without a
+  live Discord lookup; ids and every timestamp stay cleartext.
 - **Construction and honest limits:** AES-256-GCM from the approved
   `cryptography` dependency (deviation d1 replaced an earlier hand-rolled
   HMAC-SHA256 keystream), with the content key derived from `JLAB_CACHE_KEY`

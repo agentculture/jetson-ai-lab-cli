@@ -369,6 +369,25 @@ def test_fetch_then_purge_then_search_finds_nothing_for_that_author(key: str, tm
     assert miss_m.exists()
 
 
+def test_purge_author_leaves_no_encrypted_name_behind(key: str) -> None:
+    """d4: purging an author removes the whole document — encrypted name
+    envelopes included — not just what a decrypting fetch would show."""
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [_message("1", author="42"), _message("2", author="99")],
+        collection=col,
+    )
+    assert "author_name" in col.docs["1"]  # sanity: the field really was stored
+
+    _purge.purge_author("42", collection=col, report_dirs=[])
+
+    assert "1" not in col.docs  # the whole document, name envelope included, is gone
+    assert "2" in col.docs
+    for doc in col.docs.values():
+        assert doc.get("author_id") != "42"
+
+
 def test_purge_channel_clears_cache_and_reports(key: str, tmp_path) -> None:
     col = _FakeCollection()
     roots, _hit_m, _miss, hit_l = _reports_tree(tmp_path, channel="777")
@@ -788,6 +807,43 @@ def test_purge_author_suppresses_later_stores_and_keeps_no_raw_id(key: str) -> N
     assert len(records) == 1
     for record in records:
         assert _RAW_AUTHOR not in repr(record)
+
+
+def test_suppression_record_never_carries_the_authors_name(key: str) -> None:
+    """d4: names are stored (encrypted) on messages, never on a suppression record.
+
+    The suppression collection identifies an author only by a keyed hash of
+    their id (:func:`jlab.crypto.author_digest`); nothing about deviation d4
+    changes that — this pins it against a future refactor that might thread
+    the display name through for "nicer" reporting.
+    """
+    col = _FakeCollection()
+    distinctive_name = "xqzstormrider"
+    message = {
+        "id": "1",
+        "author": {"id": _RAW_AUTHOR, "name": distinctive_name, "bot": False},
+        "content": "hello",
+        "created_at": "2026-09-01T12:00:00+00:00",
+        "edited_at": None,
+    }
+    _cache.store_messages("777", [message], collection=col)
+
+    _purge.purge_author(_RAW_AUTHOR, collection=col, report_dirs=[])
+
+    records = list(_sup(col).docs.values())
+    assert len(records) == 1
+    for record in records:
+        assert distinctive_name not in repr(record)
+        assert _RAW_AUTHOR not in repr(record)
+        # a keyed hash and nothing resembling a raw/queryable identity
+        assert set(record) <= {
+            "_id",
+            "schema",
+            "kind",
+            "digest",
+            "key_fingerprint",
+            "suppressed_at",
+        }
 
 
 def test_suppression_digest_is_hmac_under_an_hkdf_subkey_not_the_content_key(key: str) -> None:

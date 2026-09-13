@@ -232,6 +232,29 @@ def test_full_cycle_applies_an_edit_removes_a_deletion_and_purges_a_private_chan
     assert "soon-secret-room" not in json.dumps(result, default=str)
 
 
+def test_sweep_applies_a_renamed_authors_new_name(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home, tmp_path
+) -> None:
+    """d4: a changed display name is a change to re-store, like an edited body."""
+    a_msgs = _msgs("r", 4)
+    chan_a = _BackwardChannel("51099", "general", a_msgs)
+    _install(monkeypatch, {"51099": chan_a})
+    col = _FakeCollection()
+    _seed(col, "51099")
+    assert _cached(col, "51099")["r0002"]["author_name"] == "ann"
+
+    a_msgs[2].author.name = "annette"
+    a_msgs[2].author.nick = "Annette (JAL)"
+
+    result = _run_sweep(col, tmp_path)
+
+    cached = _cached(col, "51099")
+    assert cached["r0002"]["author_name"] == "annette"
+    assert cached["r0002"]["author_display_name"] == "Annette (JAL)"
+    row = _row(result, "51099")
+    assert row["updated"] == 1
+
+
 @pytest.mark.parametrize(
     ("replacement", "reason"),
     [

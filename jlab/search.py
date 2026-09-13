@@ -206,18 +206,18 @@ def _bounded_search(
 
 
 def _render_match(message: dict[str, Any]) -> dict[str, Any]:
-    """The output shape: id, created_at, author id (as stored), jump url, content.
+    """The output shape: id, created_at, author id + name, jump url, content.
 
-    The cache never stores a display name (see ``jlab.cache``'s document
-    shape) — resolving one would mean a live Discord lookup, which this
-    cache-served path never performs — so "author ... as stored" is the raw
-    author id, exactly as the cache holds it.
+    ``author_name`` is the cache's own decrypted, stored name (deviation d4)
+    — never a live Discord lookup, so this cache-served path still never
+    contacts Discord. It is ``None`` only for a message cached before d4.
     """
     created = message.get("created_at")
     return {
         "message_id": message.get("message_id"),
         "channel_id": message.get("channel_id"),
         "author_id": message.get("author_id"),
+        "author_name": message.get("author_name"),
         "created_at": created.isoformat() if isinstance(created, dt.datetime) else created,
         "jump_url": message.get("jump_url"),
         "content": message.get("content"),

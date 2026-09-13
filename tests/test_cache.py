@@ -269,6 +269,7 @@ def test_stored_document_holds_no_plaintext(key: str) -> None:
     _cache.store_messages("chan-1", [_message(content="orin nano devkit")], collection=col)
     raw = col.docs["1"]
     assert "orin nano devkit" not in repr(raw)
+    assert "someone" not in repr(raw)  # d4: the author name, also never in the clear
     assert not isinstance(raw["content"], str)
     # AES-GCM folds the authentication tag into the ciphertext, so the
     # envelope carries version, nonce and sealed bytes only.
@@ -282,6 +283,79 @@ def test_store_and_fetch_round_trip(key: str) -> None:
     assert [m["content"] for m in got] == ["orin nano devkit"]
     assert got[0]["message_id"] == "1"
     assert got[0]["author_id"] == "42"
+    assert got[0]["author_name"] == "someone"
+
+
+# ---------------------------------------------------------------------------
+# jlab.cache — author name/display name, encrypted (deviation d4)
+# ---------------------------------------------------------------------------
+
+
+def _message_with_display_name(
+    mid: str = "1",
+    *,
+    name: str | None = "xqzstormrider",
+    display_name: str | None = "Zyx Stormrider",
+) -> dict:
+    m = _message(mid)
+    author: dict[str, object] = dict(m["author"])
+    author["name"] = name
+    if display_name is not None:
+        author["display_name"] = display_name
+    m["author"] = author
+    return m
+
+
+def test_author_name_and_display_name_are_encrypted_not_cleartext(key: str) -> None:
+    col = _FakeCollection()
+    _cache.store_messages("chan-1", [_message_with_display_name()], collection=col)
+    raw = col.docs["1"]
+
+    assert "xqzstormrider" not in repr(raw)
+    assert "Zyx Stormrider" not in repr(raw)
+    assert not isinstance(raw["author_name"], str)
+    assert not isinstance(raw["author_display_name"], str)
+    assert set(raw["author_name"]) >= {"v", "n", "c"}
+    assert set(raw["author_display_name"]) >= {"v", "n", "c"}
+    # author_id stays cleartext — purge/suppression query on it directly.
+    assert raw["author_id"] == "42"
+
+
+def test_author_name_and_display_name_round_trip(key: str) -> None:
+    col = _FakeCollection()
+    _cache.store_messages("chan-1", [_message_with_display_name()], collection=col)
+    got = _cache.fetch_messages("chan-1", collection=col)[0]
+    assert got["author_name"] == "xqzstormrider"
+    assert got["author_display_name"] == "Zyx Stormrider"
+
+
+def test_absent_author_name_is_stored_and_read_as_none_never_fabricated(key: str) -> None:
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [_message_with_display_name(name=None, display_name=None)],
+        collection=col,
+    )
+    raw = col.docs["1"]
+    assert raw["author_name"] is None
+    assert raw["author_display_name"] is None
+    got = _cache.fetch_messages("chan-1", collection=col)[0]
+    assert got["author_name"] is None
+    assert got["author_display_name"] is None
+
+
+def test_a_document_cached_before_d4_still_reads(key: str) -> None:
+    """A pre-d4 document has no author_name/author_display_name keys at all."""
+    col = _FakeCollection()
+    _cache.store_messages("chan-1", [_message(content="pre-d4")], collection=col)
+    raw = col.docs["1"]
+    del raw["author_name"]
+    del raw["author_display_name"]
+
+    got = _cache.fetch_messages("chan-1", collection=col)[0]
+    assert got["content"] == "pre-d4"
+    assert got["author_name"] is None
+    assert got["author_display_name"] is None
 
 
 def test_fetch_without_key_raises_rather_than_returning_empty(

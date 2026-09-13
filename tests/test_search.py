@@ -352,12 +352,14 @@ def test_match_output_shape(monkeypatch: pytest.MonkeyPatch, key: str, lock_home
         "message_id",
         "channel_id",
         "author_id",
+        "author_name",  # d4: the cache's own decrypted, stored name
         "created_at",
         "jump_url",
         "content",
     }
     assert match["content"] == "hello world"
     assert match["author_id"] is not None
+    assert match["author_name"] == "ann"
 
 
 def test_max_matches_stops_early_and_reports_truncated(

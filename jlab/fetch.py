@@ -122,6 +122,58 @@ def _bounded_fetcher(
     return fetch
 
 
+def preflight(message_collection: Any = None) -> None:
+    """Raise CliError (exit 2) for a missing key or jlab-mongodb URI.
+
+    Shared by every path that is about to open a Discord session and write to
+    the cache (:func:`fetch_channel`, and :mod:`jlab.read`'s ``--refresh``
+    live re-read) — surfaced before connecting to Discord, never after a span
+    of message bodies has already been downloaded only to be thrown away.
+    """
+    _crypto._key_material()
+    if message_collection is None:
+        with _mongo.message_collection():
+            pass
+
+
+async def validated_channel(client: Any, channel_id: int, gid: int) -> Any:
+    """Fetch *channel_id* and verify it belongs to guild *gid* and is public.
+
+    The ONE guarded check :func:`fetch_channel` and :mod:`jlab.read`'s
+    ``--refresh`` live re-read both reuse — never re-derived, and always run
+    before any ``history()`` call, so a private or another guild's channel's
+    name and content never reach the cache or CLI output either way.
+    """
+    guild = await client.fetch_guild(gid)
+    channel = await client.fetch_channel(channel_id)
+    everyone = guild.default_role
+    # The bot may belong to other guilds; a channel id from one of them
+    # would otherwise pass the public test against OUR @everyone role.
+    owner = getattr(getattr(channel, "guild", None), "id", None)
+    if owner is None or int(owner) != int(gid):
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"refusing to access channel {channel_id}: not a channel of guild {gid}",
+            remediation=(
+                "only the configured guild's public channels are read; "
+                "run `jetson-ai-lab-cli discord channels` to list them"
+            ),
+        )
+    # o3: the public check is re-applied to THIS id, not inherited from a
+    # listing, and runs before any history() call — _channel_public is
+    # the single source of the public test (never re-derived here).
+    if _discord._channel_public(channel, everyone) is not True:
+        raise CliError(
+            code=EXIT_USER_ERROR,
+            message=f"refusing to access channel {channel_id}: not a public channel",
+            remediation=(
+                "only channels @everyone can view are read; "
+                "run `jetson-ai-lab-cli discord channels` to confirm visibility"
+            ),
+        )
+    return channel
+
+
 def fetch_channel(
     channel_id_raw: str,
     *,
@@ -180,10 +232,7 @@ def fetch_channel(
     # Preflight: a missing key or jlab-mongodb URI is an exit-2 setup error, so
     # surface it before connecting to Discord — never after a span of message
     # bodies has already been downloaded only to be thrown away.
-    _crypto._key_material()
-    if message_collection is None:
-        with _mongo.message_collection():
-            pass
+    preflight(message_collection)
 
     suppressed_total: dict[str, int] = {"n": 0}
 
@@ -197,33 +246,7 @@ def fetch_channel(
         suppressed_total["n"] += result.get("suppressed", 0)
 
     async def action(client: Any) -> dict[str, Any]:
-        guild = await client.fetch_guild(gid)
-        channel = await client.fetch_channel(channel_id)
-        everyone = guild.default_role
-        # The bot may belong to other guilds; a channel id from one of them
-        # would otherwise pass the public test against OUR @everyone role.
-        owner = getattr(getattr(channel, "guild", None), "id", None)
-        if owner is None or int(owner) != int(gid):
-            raise CliError(
-                code=EXIT_USER_ERROR,
-                message=f"refusing to fetch channel {channel_id}: not a channel of guild {gid}",
-                remediation=(
-                    "fetch only reads the configured guild's public channels; "
-                    "run `jetson-ai-lab-cli discord channels` to list them"
-                ),
-            )
-        # o3: the public check is re-applied to THIS id, not inherited from a
-        # listing, and runs before any history() call — _channel_public is
-        # the single source of the public test (never re-derived here).
-        if _discord._channel_public(channel, everyone) is not True:
-            raise CliError(
-                code=EXIT_USER_ERROR,
-                message=f"refusing to fetch channel {channel_id}: not a public channel",
-                remediation=(
-                    "fetch only reads channels @everyone can view; "
-                    "run `jetson-ai-lab-cli discord channels` to confirm visibility"
-                ),
-            )
+        channel = await validated_channel(client, channel_id, gid)
         loop = asyncio.get_running_loop()
         fetcher = _bounded_fetcher(loop, channel, max_messages)
         return await loop.run_in_executor(
