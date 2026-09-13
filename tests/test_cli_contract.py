@@ -1,282 +1,143 @@
-"""Contract tests for the CLI surface: --json support, error handling, verb lists."""
+"""CLI contract for every ``discord`` verb (t14, obligation o9).
+
+Every list here is DERIVED — from the real parser, the module docstring, the
+``discord overview --json`` payload and the explain catalog — never hard-coded,
+so a verb added later without its contract fails a test instead of drifting.
+No test calls a verb in a way that could reach Discord or MongoDB: ``--json``
+support is read off the parser, and every error case is rejected offline.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 
 import pytest
 
 from jlab.cli import _build_parser, main
+from jlab.cli._commands import discord as discord_cmd
+from jlab.explain.catalog import ENTRIES
 
 
-def _discover_discord_verbs() -> list[str]:
-    """Walk the parser to find all registered discord verbs."""
-    root_parser = _build_parser()
-    discord_parser = None
-
-    # Find the discord subparser
-    for action in root_parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            for name, subparser in action.choices.items():
-                if name == "discord":
-                    discord_parser = subparser
-                    break
-
-    if not discord_parser:
-        return []
-
-    verbs = []
-    for action in discord_parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            verbs = list(action.choices.keys())
-            break
-
-    return sorted(verbs)
+def _discord_subparsers() -> dict[str, argparse.ArgumentParser]:
+    for action in _build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction) and "discord" in action.choices:
+            noun = action.choices["discord"]
+            for sub in noun._actions:
+                if isinstance(sub, argparse._SubParsersAction):
+                    return dict(sub.choices)
+    raise AssertionError("the parser registers no discord noun group")
 
 
-# --- a9: Parser paths resolve through explain ---
+VERBS = sorted(_discord_subparsers())
+
+#: Input each verb rejects before any network or database access, beyond the
+#: unknown-flag case every verb gets. Keys must be registered verbs.
+SEMANTIC_ERRORS: dict[str, list[list[str]]] = {
+    "read": [[]],  # missing channel id
+    "fetch": [[]],  # missing channel id
+    "search": [["123"]],  # missing --grep
+    "coverage": [["abc def"], ["123", "--since", "2026-09-01T00:00:00+00:00"]],
+    "purge": [[], ["--author", "42", "--channel", "7"]],
+}
+
+#: Verbs whose argument parsing accepts anything at all, so no offline
+#: user-input error exists for them. Must stay empty unless justified here.
+NO_OFFLINE_ERROR: dict[str, str] = {}
 
 
-def test_every_discord_verb_has_catalog_entry() -> None:
-    """Every discord verb registered on the parser has an explain entry.
-
-    This is the contract: if a verb is registered, it must be documented.
-    """
-    from jlab.explain.catalog import ENTRIES
-
-    registered = _discover_discord_verbs()
-
-    for verb in registered:
-        path = ("discord", verb)
-        assert path in ENTRIES, f"discord verb {verb!r} has no catalog entry"
-
-
-# --- o9: Every discord verb accepts --json and errors properly ---
-
-
-@pytest.mark.parametrize("verb", _discover_discord_verbs())
-def test_discord_verb_accepts_json_flag(verb: str) -> None:
-    """Every discord verb accepts --json (even if it has no effect)."""
-    if verb == "overview":
-        # overview doesn't require args
-        rc = main(["discord", verb, "--json"])
-        assert rc == 0
-    elif verb in ("channels", "doctor", "sweep"):
-        # These don't require args, but may fail with env errors (code 2).
-        # The point of this test is just that --json flag is accepted by the parser.
-        try:
-            rc = main(["discord", verb, "--json"])
-            # Success is fine
-            assert rc in (0, 2), f"Unexpected exit code {rc}"
-        except SystemExit as exc:
-            # Argparse error (shouldn't happen for these) or other exit
-            assert exc.code in (0, 1, 2)
-
-
-@pytest.mark.parametrize(
-    "verb,args,should_error",
-    [
-        ("read", [], True),  # missing channel_id
-        ("fetch", [], True),  # missing channel_id
-        ("search", ["123"], True),  # missing --grep (required)
-        ("coverage", ["abc def"], True),  # invalid channel id format
-        ("purge", [], True),  # missing target (one of --author, --channel, --older-than)
-    ],
-)
-def test_discord_verb_user_input_errors_exit_1(
-    verb: str,
-    args: list[str],
-    should_error: bool,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """User-input errors exit 1 with no stdout, structured stderr."""
-    if should_error:
-        try:
-            rc = main(["discord", verb, *args])
-            assert rc == 1, f"discord {verb} {' '.join(args)} should exit 1, got {rc}"
-        except SystemExit as exc:
-            # Argparse errors raise SystemExit; that's also valid (code 1)
-            assert exc.code == 1, f"discord {verb} {' '.join(args)} should exit 1, got {exc.code}"
-
-        captured = capsys.readouterr()
-        # No stdout on error
-        assert captured.out == "", f"Expected no stdout on error, got: {captured.out}"
-        # Stderr has error message
-        assert captured.err, "Expected stderr on error, got empty"
-
-
-@pytest.mark.parametrize(
-    "verb,args",
-    [
-        ("read", []),  # missing channel_id
-        ("fetch", []),  # missing channel_id
-        ("search", ["123"]),  # missing --grep
-        ("coverage", ["abc def"]),  # invalid channel id
-        ("purge", []),  # missing target
-    ],
-)
-def test_discord_verb_user_input_error_text_format(
-    verb: str,
-    args: list[str],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Text-mode user-input errors have error: and hint: lines."""
+def _exit_code(argv: list[str]) -> int:
+    """``main``'s exit code, whether it returns it or a parse error raises SystemExit."""
     try:
-        rc = main(["discord", verb, *args])
-        assert rc == 1
+        return int(main(argv) or 0)
     except SystemExit as exc:
-        # Argparse errors raise SystemExit
-        assert exc.code == 1
+        return int(exc.code or 0)
 
+
+def _error_cases() -> list[tuple[str, list[str]]]:
+    cases = [(verb, ["--no-such-flag"]) for verb in VERBS if verb not in NO_OFFLINE_ERROR]
+    for verb, arg_sets in SEMANTIC_ERRORS.items():
+        cases.extend((verb, args) for args in arg_sets)
+    return cases
+
+
+def test_the_discord_noun_has_verbs() -> None:
+    assert {"fetch", "search", "read", "coverage", "sweep", "purge"} <= set(VERBS)
+
+
+def test_error_case_tables_name_only_registered_verbs() -> None:
+    assert set(SEMANTIC_ERRORS) <= set(VERBS)
+    assert set(NO_OFFLINE_ERROR) <= set(VERBS)
+    assert set(VERBS) - set(NO_OFFLINE_ERROR), "every verb exempted leaves nothing tested"
+
+
+@pytest.mark.parametrize("verb", VERBS)
+def test_every_discord_verb_has_a_catalog_entry(verb: str) -> None:
+    assert ("discord", verb) in ENTRIES
+    assert main(["explain", "discord", verb]) == 0
+
+
+@pytest.mark.parametrize("verb", VERBS)
+def test_every_discord_verb_accepts_json(verb: str) -> None:
+    options = {s for a in _discord_subparsers()[verb]._actions for s in a.option_strings}
+    assert "--json" in options
+
+
+@pytest.mark.parametrize(("verb", "args"), _error_cases())
+def test_a_user_input_error_in_text_mode_is_error_and_hint_on_stderr(
+    verb: str, args: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _exit_code(["discord", verb, *args]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    err = captured.err
-    assert err.startswith("error:"), f"Expected 'error:' prefix in stderr, got: {err[:50]}"
-    assert "hint:" in err, f"Expected 'hint:' in stderr, got: {err}"
-    # No traceback
-    assert "Traceback" not in err, f"Expected no traceback, got: {err}"
+    assert captured.err.startswith("error:")
+    assert "\nhint:" in captured.err
+    assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize(
-    "verb,args",
-    [
-        ("read", []),
-        ("fetch", []),
-        ("search", ["123"]),
-        ("coverage", ["abc def"]),
-        ("purge", []),
-    ],
-)
-def test_discord_verb_user_input_error_json_format(
-    verb: str,
-    args: list[str],
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(("verb", "args"), _error_cases())
+def test_a_user_input_error_in_json_mode_is_one_json_object_on_stderr(
+    verb: str, args: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """JSON-mode user-input errors emit {code, message, remediation} to stderr."""
-    try:
-        rc = main(["discord", verb, "--json", *args])
-        assert rc == 1
-    except SystemExit as exc:
-        # Argparse errors raise SystemExit
-        assert exc.code == 1
-
+    assert _exit_code(["discord", verb, *args, "--json"]) == 1
     captured = capsys.readouterr()
-    assert captured.out == "", "Expected no stdout in JSON error mode"
-    assert captured.err, "Expected stderr in JSON error mode"
-
-    try:
-        payload = json.loads(captured.err)
-    except json.JSONDecodeError as e:
-        pytest.fail(f"stderr is not valid JSON: {captured.err}\n{e}")
-
-    assert "code" in payload, f"Expected 'code' in error JSON: {payload}"
-    assert "message" in payload, f"Expected 'message' in error JSON: {payload}"
-    assert "remediation" in payload, f"Expected 'remediation' in error JSON: {payload}"
-    assert payload["code"] == 1, f"Expected code=1 for user error, got {payload['code']}"
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert set(payload) == {"code", "message", "remediation"}
+    assert payload["code"] == 1
 
 
-# --- a3: Verb lists match across docstring, overview, catalog ---
-
-
-def test_discord_verb_lists_match() -> None:
-    """The module docstring, cmd_discord_overview, and catalog list the same verbs.
-
-    All three lists must be kept in sync: they are the contract between the
-    implementation and the documentation surface.
-    """
-    # Discover what's actually registered
-    registered = set(_discover_discord_verbs())
-
-    # Extract from docstring (jlab/cli/_commands/discord.py lines 3-4)
-    # Verbs: channels, read, active, members, links, fetch, search, purge, sweep,
-    # coverage, doctor, overview.
-    docstring_verbs = {
-        "channels",
-        "read",
-        "active",
-        "members",
-        "links",
-        "fetch",
-        "search",
-        "purge",
-        "sweep",
-        "coverage",
-        "doctor",
-        "overview",
+def _docstring_verbs() -> set[str]:
+    doc = discord_cmd.__doc__ or ""
+    match = re.search(r"Verbs:(.*?)\n\n", doc, re.S)
+    assert match, "the module docstring has no 'Verbs:' paragraph"
+    return {
+        v.strip().rstrip(".") for v in match.group(1).replace("\n", " ").split(",") if v.strip()
     }
 
-    # Extract from cmd_discord_overview function (the items list)
-    # This is what `discord overview` prints to users
-    overview_verbs = {
-        "channels",
-        "read",
-        "active",
-        "members",
-        "links",
-        "fetch",
-        "search",
-        "purge",
-        "sweep",
-        "coverage",
-        "doctor",
-        "overview",
-    }
 
-    # Extract from catalog _DISCORD root entry
-    catalog_verbs_from_root = {
-        "channels",
-        "read",
-        "active",
-        "members",
-        "links",
-        "coverage",
-        "fetch",
-        "search",
-        "purge",
-        "sweep",
-        "doctor",
-        "overview",
-    }
-
-    # All three must match the registered verbs
-    assert (
-        docstring_verbs == registered
-    ), f"Module docstring missing verbs: {registered - docstring_verbs}"
-
-    assert (
-        overview_verbs == registered
-    ), f"cmd_discord_overview missing verbs: {registered - overview_verbs}"
-
-    assert (
-        catalog_verbs_from_root == registered
-    ), f"catalog _DISCORD missing verbs: {registered - catalog_verbs_from_root}"
+def _overview_verbs(capsys: pytest.CaptureFixture[str]) -> set[str]:
+    assert main(["discord", "overview", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    sections = payload.get("sections", payload) if isinstance(payload, dict) else payload
+    items = next(s["items"] for s in sections if s.get("title") == "Verbs")
+    return {item.split()[0] for item in items}
 
 
-# --- Exemptions for verbs that have no offline input validation ---
+def _catalog_verbs() -> set[str]:
+    root = ENTRIES[("discord",)]
+    section = root.split("## Verbs", 1)[1].split("\n## ", 1)[0]
+    return set(re.findall(r"^- `jetson-ai-lab-cli discord (\w+)", section, re.M))
 
 
-def test_verbs_with_no_offline_input_errors() -> None:
-    """Some verbs can't error on input alone; they require environment access.
+def test_docstring_lists_every_registered_verb() -> None:
+    assert _docstring_verbs() == set(VERBS)
 
-    These verbs are exempted from the user-input-error test because their
-    required parameters (e.g., channel_id) are accepted as-is by the parser,
-    and the actual validation requires Discord or Mongo access.
 
-    This test documents the exemption list and verifies each named verb
-    actually exists.
-    """
-    exempted = {
-        "active",  # No required positional; any int flags are valid
-        "members",  # No required positional; any int flags are valid
-        "links",  # No required positional; any int flags are valid
-        "channels",  # No required positional; --all is valid
-        "sweep",  # No arguments at all
-        "doctor",  # No arguments at all
-        "overview",  # No required arguments
-    }
+def test_overview_lists_every_registered_verb(capsys: pytest.CaptureFixture[str]) -> None:
+    assert _overview_verbs(capsys) == set(VERBS)
 
-    registered = set(_discover_discord_verbs())
-    missing = exempted - registered
 
-    assert not missing, f"Exemption list names verbs that don't exist: {missing}"
+def test_catalog_root_lists_every_registered_verb() -> None:
+    assert _catalog_verbs() == set(VERBS)
