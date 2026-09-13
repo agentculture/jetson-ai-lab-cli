@@ -4,7 +4,7 @@
   "schema_version": 6,
   "status": "exported",
   "created": "2026-09-12T15:17:25Z",
-  "updated": "2026-09-12T16:47:13Z",
+  "updated": "2026-09-13T02:38:15Z",
   "claims": [
     {
       "id": "c1",
@@ -1394,6 +1394,39 @@
       ],
       "origin": "llm",
       "status": "approved"
+    },
+    {
+      "id": "l2",
+      "code": "assumption-for-measurement",
+      "what": "the public-channel check for fetch, read --refresh and sweep was validated only against fake Discord objects whose channel .guild carried roles; the real gateway-less discord.py client attaches a roleless stub guild to fetch_channel() results, so every real public channel failed the check \u2014 fetch refused all channels and sweep would have purged every cached channel, while all unit tests passed",
+      "skipped_check": "a live read-only check of _channel_public against at least one real fetch_channel() result before merging t7/t9/t11",
+      "refs": [
+        "t7 t9 t11; agentculture/discord-bot-cli#20; found by t16's live motivating case"
+      ],
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "l3",
+      "code": "assumption-for-measurement",
+      "what": "cached timestamps were validated only against an in-memory fake collection that returns timezone-aware datetimes; real jlab-mongodb decodes BSON datetimes as naive by default, so every cached-timestamp comparison (coverage, read, search, sweep) raised TypeError on the first live run while all unit tests passed",
+      "skipped_check": "one store/read round-trip through the real jlab-mongodb container before merging t5/t6",
+      "refs": [
+        "t5 t6 t7 t9 t11; fixed by tz_aware=True in jlab/mongo.py (commit 3ca416d); found by t16's live motivating case"
+      ],
+      "origin": "llm",
+      "status": "proposed"
+    },
+    {
+      "id": "l4",
+      "code": "assumption-for-measurement",
+      "what": "coverage completeness was validated only against a fake collection that keeps microsecond datetimes; real jlab-mongodb stores BSON datetimes at millisecond precision, so a coverage end written at 'now' reads back below the in-memory 'now' and every live fetch and read --refresh reported complete=false over a sub-millisecond tail \u2014 the t16 agent recorded it as a harmless race rather than a defect",
+      "skipped_check": "a live coverage round-trip through jlab-mongodb comparing a just-widened window with describe()",
+      "refs": [
+        "t6 t7 t9; seen in docs/motivating-case.md steps 1 and 3"
+      ],
+      "origin": "llm",
+      "status": "proposed"
     }
   ],
   "obligations": [

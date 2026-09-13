@@ -8,28 +8,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 agent for the Jetson AI Lab community. It is meant to fetch and index Jetson AI
 Lab docs/sources and answer members' questions on Discord.
 
-**Current state:** mostly still the scaffold, with the **first slice of domain
-functionality now real**. The repo began as the unmodified **AgentCulture
-"culture-agent-template" scaffold** (see `git log`: *"scaffold jetson-ai-lab-cli
-from culture-agent-template"*) — a generic, dependency-free **agent-first CLI**
-plus mesh-agent plumbing (identity, skill kit, CI/deploy baseline). On top of
-that, the **`jetson-discord-scan` skill** now gives the agent a real, read-only
-window into the Jetson AI Lab Discord (see *Domain* below). The rest of the
-intended pipeline — indexing what it reads and answering members' questions — is
-still TODO. Build it by *adding* verbs/nouns to this CLI (or new skills/
-subsystems) on top of the scaffold; the patterns below are how you do that.
+**Current state:** mostly still the scaffold, with a **substantial slice of
+domain functionality now real** on the Discord side. The repo began as the
+unmodified **AgentCulture "culture-agent-template" scaffold** (see `git log`:
+*"scaffold jetson-ai-lab-cli from culture-agent-template"*) — a generic,
+dependency-free **agent-first CLI** plus mesh-agent plumbing (identity, skill
+kit, CI/deploy baseline). On top of that, the agent now has a real, read-only
+Discord surface that has grown well past a shallow scan: it lists and reads
+public channels and ranks them by activity (the original
+**`jetson-discord-scan`** skill's scope); aggregates participation and shared
+links into local reports (`members`, `links`); and, as of this task, a
+**paged, cache-backed read/search pipeline** — `fetch` backward-pages a public
+channel's full history into an encrypted MongoDB cache past Discord's
+100-message live-read ceiling, `search` regex-searches that cache and reports
+honestly when a window isn't fully covered rather than risking a false "no
+matches", `read --refresh` forces a live re-read to catch edits/new messages,
+`sweep` reconciles the whole cache with Discord daily (edits, deletions,
+channels gone private), and `purge` deletes a person's or channel's data (and
+every report run that mentions them) to back the published privacy policy.
+See *Domain* below for the full shape of this and its retention/encryption
+rules.
 
-Be honest about this gap: the agent can **read** the Jetson AI Lab Discord today,
-but it does not yet index sources or answer questions — don't describe those as
-if they exist. The README now documents the Discord read capability; everything
-else in "What you get" still describes the template.
+The rest of the intended pipeline — **indexing** what the agent has read into
+a queryable corpus, and **answering members' questions** on Discord — is
+still **not built**. Build it by *adding* verbs/nouns to this CLI (or new
+skills/subsystems) on top of the scaffold; the patterns below are how you do
+that.
+
+Be honest about this gap: the agent can read, cache, search, and reconcile
+the Jetson AI Lab Discord's public history today — including a full paged
+history past the live 100-message cap — but it does not index that corpus
+for retrieval or answer members' questions; don't describe those as if they
+exist. The README documents the Discord read/fetch/search capability;
+everything else in "What you get" still describes the template.
 
 ## Domain: the Jetson AI Lab Discord (read-only, public-only)
 
 The agent's job starts at the **Jetson AI Lab Research Group** Discord —
-**guild `1326246312072581160`** (~120 channels). The `jetson-discord-scan` skill
-(`.claude/skills/jetson-discord-scan/`) is the entry point and the first real
-domain code in the repo. Two constraints are **load-bearing — never relax them
+**guild `1326246312072581160`** (~120 channels). The `jetson-discord-scan`
+skill (`.claude/skills/jetson-discord-scan/`) was the entry point and the
+first real domain code in the repo; the `discord` noun group under `jlab`
+has since grown well past it — `channels`/`read`/`active` (the original
+shallow scan), `members`/`links` (participation and shared-link reports),
+and `fetch`/`search`/`read --refresh`/`sweep`/`purge`/`coverage` (the
+paged-read, cache-backed pipeline this task added, detailed further down).
+Two constraints are **load-bearing across all of it — never relax them
 casually**:
 
 - **Read-only.** The bot token is read-scoped and the skill exposes *no* write
@@ -138,6 +161,106 @@ ranking, no recommended reading.
 `discord read` and `discord active` are unchanged by this addition — `links`
 is a new, additive verb in the `discord` noun group.
 
+### The message cache: full message bodies are retained, by decision
+
+The paged-read/regex-search path (`jlab/cache.py`, backed by the jlab-mongodb
+instance `jlab/mongo.py` guards) is the **third** and most retentive of jlab's
+three content positions, and it is stated here rather than left for a reader to
+infer from behaviour:
+
+1. **`members` — no content.** Message text never survives aggregation; only
+   counts and lengths do.
+2. **`links` — URL-only.** The URL is retained because a links report cannot
+   exist without it; the surrounding message text never is.
+3. **the message cache — full message bodies are retained.** The whole message
+   is stored, because a read past the 100-message ceiling and a regex search
+   over history are exactly "the text of what was said" and cannot be served
+   from counts or URLs. This is a deliberate decision the user approved, not a
+   drift from rule 1: the members no-content rule is **not** inherited here.
+
+Because it retains the most, this path carries obligations the other two do
+not, and they are load-bearing:
+
+- **Encrypted at the application layer.** Content is encrypted by
+  `jlab/crypto.py` *before* pymongo sees it and decrypted after it comes back,
+  so encryption at rest does not depend on the MongoDB edition's storage
+  engine — community edition has none. The key comes from **`JLAB_CACHE_KEY`**
+  (env only, read in `jlab/crypto.py` and nowhere else, mirroring
+  `JLAB_MONGO_URI`); a missing, blank or short key is a `CliError(code=2)`,
+  never a silent fall back to storing plaintext.
+- **Measured, not assumed.** `jlab discord doctor` calls
+  `jlab.cache.measure_encryption()`, which stores a marked probe through the
+  real write path, reads the raw stored document back *without* decrypting,
+  and fails if the marker is found. Doctor reports what it measured.
+- **Three timestamps per message.** `created_at` (Discord's), `updated_at`
+  (Discord's edit timestamp, `None` when unedited) and `stored_at` (when jlab
+  wrote the copy) — so edits are detectable and the age of the local copy is
+  always known. Metadata (channel id, author id, timestamps, jump URL) is
+  stored in the clear on purpose so the cache stays queryable; only the body
+  and, per deviation d4 below, the author's name and display name are
+  encrypted.
+- **Author names are stored, encrypted (deviation d4, issue #23).** `author_name`
+  and `author_display_name` are stored beside the body, each its own encrypted
+  envelope, so a paged read or search can show who said something without a
+  live Discord lookup; ids and every timestamp stay cleartext.
+- **Construction and honest limits:** AES-256-GCM from the approved
+  `cryptography` dependency (deviation d1 replaced an earlier hand-rolled
+  HMAC-SHA256 keystream), with the content key derived from `JLAB_CACHE_KEY`
+  via HKDF-SHA256 and a fresh 96-bit nonce per message. It protects content at
+  rest in jlab-mongodb, not against anyone holding the key, process memory or
+  the environment; ciphertext length leaks plaintext length; there is no key
+  rotation (re-keying means re-fetching). `jlab/crypto.py`'s module docstring
+  states the limits in full; don't overstate them elsewhere.
+
+### Purge: per-user / per-channel deletion and the retention bound (`jlab discord purge`)
+
+`jlab discord purge` is the runnable deletion path behind Discord's Developer
+Terms and the published privacy policy (delete on user request, on Discord
+request, and once retention is no longer needed — including derived indexes).
+Exactly one target: `--author ID`, `--channel ID`, or `--older-than DAYS`.
+Logic lives in `jlab/purge.py`; the Mongo side is `jlab/cache.py`'s
+`delete_by_author` / `delete_by_channel` / `delete_older_than` (one server-side
+`delete_many` on the cleartext `author_id` / `channel_id` / `created_at`, no
+decryption needed).
+
+**Derived reports are purged too, whole-run.** Every file of every run
+directory under `data/reports/{members,links}/` (including links `-cache`
+siblings) is scanned for the target id on digit boundaries; a run that
+mentions it is removed entirely, never row-edited — a run is one rendered,
+internally consistent artifact set and is regenerable, so over-removal costs a
+re-run while under-removal breaks the promise. Known limit: members reports
+carry per-channel counts but no channel ids, so a `--channel` purge cannot tell
+which members runs that channel fed; those runs hold no content from it.
+
+**Safety.** Targets must be bare numeric ids — empty, whitespace, `*`, `all`
+and patterns exit 1 before anything is touched. **Without `--yes` the verb is
+a dry run**; with it, it reports exactly what matched and what was removed.
+Re-running is idempotent.
+
+**Coverage, locks and suppression.** A purge never leaves `jlab/coverage.py`
+over-claiming: `--channel X --yes` clears X's coverage, and `--older-than
+DAYS --yes` trims every channel's coverage to the cutoff
+(`coverage.trim_before`), so a purged window reads back as a gap. Each runs
+under t6's per-channel `flock` — `--older-than` takes one channel's lock at a
+time (delete that channel's old messages + trim, release, next), never a
+guild-wide lock — blocking by default so cron waits out an in-flight fetch.
+`--author X --yes` leaves coverage alone and first records X in the
+`suppression` collection (`jlab/mongo.py::suppression_collection`) as a
+**keyed hash** — HMAC-SHA256 under an HKDF sub-key of `JLAB_CACHE_KEY`
+(`crypto.author_digest`), never the raw id — then deletes.
+`cache.store_messages` enforces it centrally: a suppressed author's messages
+are never written (re-checked after the write, so a racing purge wins), the
+summary reports `suppressed`, and a suppression record made under a different
+key makes stores refuse (exit 2) rather than silently re-admit the author.
+Missing key → exit 2 before anything is deleted. Dry runs change nothing,
+coverage and suppression included.
+
+**Retention is bounded, not indefinite.** The cache keeps full bodies only
+because paged read and regex search need them; `purge --older-than DAYS --yes`
+drops cached messages and report runs older than the window the operator's
+stated functionality needs, and is meant to run from cron beside the daily
+reconciliation sweep. jlab builds no scheduler.
+
 ## Running the CLI — the command-name trap
 
 The installed console script is **`jlab`**, not `jetson-ai-lab-cli`:
@@ -160,8 +283,9 @@ tests assert `usage: jetson-ai-lab-cli` and `nick: jetson-ai-lab-cli`.
 
 ## Commands
 
-Python 3.12+, managed with **uv**. Runtime has **zero third-party dependencies**
-(`dependencies = []` in `pyproject.toml`); `teken`, pytest, linters are dev-only.
+Python 3.12+, managed with **uv**. Runtime dependencies are limited to the
+approved allowlist under *Conventions* (`pymongo`, `cryptography`, plus the optional
+`[discord]` extra); `teken`, pytest, linters are dev-only.
 
 ```bash
 uv sync                                          # create .venv, install dev deps
@@ -264,10 +388,16 @@ new surface must keep these true, or the build fails:
 
 ## Conventions
 
-- **Zero runtime dependencies.** Keep `dependencies = []`. **Exception:**
-  `discord-bot-cli` is an AgentCulture-sibling optional `[discord]` extra
-  (lazy-imported; core install stays `deps=[]`). Any other library needs are a
-  deliberate decision to discuss — don't quietly add deps to the runtime package.
+- **Approved-dependencies allowlist.** Runtime and optional dependencies are restricted
+  to an approved list: `discord-bot-cli` (optional `[discord]` extra, lazy-imported),
+  `pymongo` (the MongoDB cache), and `cryptography` (AES-256-GCM for the cache's
+  encryption at rest — approved deliberately in preference to a hand-rolled
+  construction, because that encryption backs a published compliance commitment and
+  unreviewed crypto is a poor foundation for one). Any other library needs are a deliberate decision
+  to discuss — don't quietly add deps to the runtime package. The allowlist is enforced
+  mechanically by a test that reads `pyproject.toml` and fails the build when a
+  distribution is missing from the approval list, so adding a dependency without
+  approving it breaks the build rather than passing review unnoticed.
 - **`from __future__ import annotations`** at the top of every module.
 - **Cite-don't-import skills.** Most of `.claude/skills/` is vendored from
   **guildmaster** (with three skills originating in **devague**). Provenance +

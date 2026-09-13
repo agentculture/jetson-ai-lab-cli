@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/). This project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-12
+
+### Added
+
+- Encrypted jlab-mongodb message cache (`jlab/cache.py`): message documents carrying `created_at` (Discord's), `updated_at` (Discord's edit timestamp, `null` when unedited) and `stored_at` (when jlab wrote the copy), upserted through `jlab.mongo.message_collection()`.
+- Application-level content encryption (`jlab/crypto.py`): AES-256-GCM via the `cryptography` package, which joins `discord-bot-cli` and `pymongo` on the approved-dependency list. The content key is derived from `JLAB_CACHE_KEY` with HKDF-SHA256 and each message gets a fresh 96-bit nonce. A missing, blank or under-32-character key raises `CliError(code=2)`; there is no plaintext fallback. (A hand-rolled stdlib construction was built first and replaced before release, as recorded in deviation d1.)
+- `jlab discord doctor` now **measures** cache encryption instead of assuming it: `jlab.cache.measure_encryption()` stores a marked probe through the real write path, reads the raw document back without decrypting, fails if the marker is found, and deletes the probe.
+- `edited_at` on serialized Discord messages, so an edit is detectable in the cache.
+- `jlab discord read --refresh`: the only path by which `read` now contacts Discord. It live-re-reads the window `read` will serve (the most recent `--limit` messages), reconciles that span into the cache via `jlab.reconcile.reconcile_span` (also factored out of `jlab.sweep`) — edits and new messages stored, deletions and coverage widening applied only when the span was re-read completely — and then serves from the cache, so an edit or deletion inside an already-covered window surfaces, not just gaps.
+- `jlab discord read --json` gains an additive `uncovered` key (list of `{start,end}` gap intervals), present only when `complete` is `false`.
+- Author names are now stored, encrypted, alongside the body (deviation d4): `jlab.cache` encrypts `author_name`/`author_display_name` in their own envelope apiece (never a cleartext or queryable field), `jlab discord read`/`search` surface them, and `jlab.reconcile` (`jlab.sweep` and `--refresh`) treats a changed name as a change to re-store, same as an edited body.
+- `jlab discord fetch <channel_id>`: backward-pages a public channel's missing history into the cache past Discord's 100-message live-read cap, computing only the uncovered gaps against `jlab.coverage` and storing every span through `jlab.cache.store_messages`. `--until` bounds how far back the drain goes (default: the channel's beginning), `--max-messages` bounds the total messages fetched.
+- `jlab discord search <channel_id> --grep <pattern>`: cache-served-only regex search over the corpus `fetch` built, with `--since`/`--until` window bounds, `--max-matches`, and a `--timeout`-bounded child process so a pathological pattern is killed rather than hanging. Reports a window that is not fully covered as `uncovered`, not as "no matches" — it never answers from a partial cache silently.
+- `jlab discord coverage [channel_id]`: inspects recorded coverage intervals, or covered/uncovered spans and completeness within a `--since`/`--until` window.
+- `jlab discord sweep`: the daily reconciliation pass — re-verifies every covered channel's visibility, purges the ones gone/foreign/no-longer-public (report by id only, never by name), and re-reads every covered interval so edits are applied and deletions removed, deleting only inside spans re-read completely.
+- `jlab discord purge (--author ID | --channel ID | --older-than DAYS) [--yes]`: deletes cache content and every report run mentioning the target, and clears/trims coverage to match — a dry run by default, `--yes` to actually delete. An author purge records a keyed hash (never the raw id) in a suppression list so `jlab.cache.store_messages` refuses to re-admit them even under a racing fetch.
+
+### Changed
+
+- `jlab discord read --json` now includes a `complete` field reporting whether the requested window was fully read. The change is additive: `channel_id` and `messages` are unchanged, and text-mode output is the same.
+- CLAUDE.md and README now state the retention position explicitly: this path retains **full message bodies by decision**, beside the `members` no-content rule and the `links` URL-only rule, together with the encryption obligation and the honest limits of the construction.
+- `jlab discord read` is now cache-served by default instead of live-by-default: on a covered window it returns the same messages in the same text/JSON shape as before; on an uncovered or partly covered window it reports the gap on stderr and points at `--refresh` instead of returning an empty result.
+- A cache-served read message's `author.name`/`author.display_name` come from the cache's own encrypted, stored fields (deviation d4); they are `null` (never fabricated) only for a message cached before that change, and text mode falls back to the raw author id only then.
+- CLAUDE.md's "What this repo is" and "Domain" sections now describe the full fetch/search/read/coverage/sweep/purge surface instead of only the original shallow scan, while still stating plainly that indexing sources and answering members' questions are not built.
+
+### Fixed
+
+- **`jlab discord fetch`/`read --refresh` refused every real, public channel** ("not a public channel"), and **`jlab discord sweep` would have purged every channel's cache on its first real run**: `jlab.fetch.validated_channel` and `jlab.sweep._Sweeper._verify` both resolved the public-channel permission check against the roleless "unavailable" stub guild `Client.fetch_channel()` attaches under discord-bot-cli's gateway-less (`Intents.none()`) client, which always denies every permission. Found running this task's live motivating case against the real Jetson AI Lab guild. Fixed by resolving the check against the fully-populated guild `client.fetch_guild()` already returned instead; filed upstream as `agentculture/discord-bot-cli#20`.
+- **Every cached-timestamp comparison against real jlab-mongodb raised `TypeError: can't compare offset-naive and offset-aware datetimes`**: pymongo decodes BSON datetimes as naive by default, dropping the UTC tzinfo stored `created_at`/`updated_at`/`stored_at` values carry. Found in the same live run. Fixed by passing `tz_aware=True` at `jlab.mongo`'s single `MongoClient` construction point.
+- **Every live `jlab discord fetch` and `read --refresh` reported `complete: false`** over a sub-millisecond "uncovered" tail: jlab-mongodb stores BSON datetimes to the millisecond, so a coverage end written at a microsecond "now" read back truncated. `jlab.coverage` now stores spans shrunk inward to whole milliseconds and compares query windows at the same precision, so coverage is never wider than what was fetched.
+
 ## [0.7.1] - 2026-09-12
 
 ### Added

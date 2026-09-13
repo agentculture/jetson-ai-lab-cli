@@ -1,6 +1,7 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, links, doctor, overview.
+Verbs: channels, read, active, members, links, fetch, search, purge, sweep,
+coverage, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
@@ -10,7 +11,13 @@ from __future__ import annotations
 
 import argparse
 
+from jlab import fetch as _fetch_mod
+from jlab import purge as _purge_mod
+from jlab import read as _read_mod
+from jlab import sweep as _sweep_mod
 from jlab.cli import _discord
+from jlab.cli._commands import coverage as _coverage_cmd
+from jlab.cli._commands import search as _search_cmd
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 from jlab.cli._output import emit_diagnostic, emit_result
 from jlab.links import cache as _links_cache_mod
@@ -71,18 +78,28 @@ def cmd_discord_channels(args: argparse.Namespace) -> int:
 
 
 def cmd_discord_read(args: argparse.Namespace) -> int:
-    channel_id = _discord.parse_id(args.channel_id, "channel_id")
     limit = int(getattr(args, "limit", 20))
-    messages = _discord.read_messages(channel_id, limit=limit)
+    refresh = bool(getattr(args, "refresh", False))
+    result = _read_mod.serve_read(args.channel_id, limit=limit, refresh=refresh)
+    messages = result["messages"]
+    complete = result["complete"]
     json_mode = bool(getattr(args, "json", False))
+    if not complete:
+        emit_diagnostic(f"read window not fully cached: {result['reason']}")
+    payload = {
+        "channel_id": result["channel_id"],
+        "messages": messages,
+        "complete": complete,
+    }
+    if not complete:
+        # Additive: a covered-window result keeps the exact 3-key shape a
+        # live read has always emitted; only an incomplete one gains this.
+        payload["uncovered"] = result["uncovered"]
     if json_mode:
-        emit_result(
-            {"channel_id": str(channel_id), "messages": messages},
-            json_mode=True,
-        )
+        emit_result(payload, json_mode=True)
     else:
         for msg in messages:
-            author = msg["author"]["name"]
+            author = msg["author"].get("name") or msg["author"].get("id")
             ts = msg["created_at"] or "?"
             emit_result(
                 f"[{ts}] {author}: {msg['content']}",
@@ -467,6 +484,172 @@ def cmd_discord_links(args: argparse.Namespace) -> int | None:
     return None
 
 
+# -- fetch --------------------------------------------------------------------
+
+
+def _fetch_text(result: dict) -> str:
+    head = "complete" if result["complete"] else "incomplete"
+    lines = [f"{head}: channel {result['channel_id']}"]
+    lines.append(f"cache: {result['stored']} messages stored ({result['suppressed']} suppressed)")
+    lines.append(
+        f"spans: {len(result['fetched'])} fetched, "
+        f"{len(result['already_covered'])} already covered"
+    )
+    for span in result["incomplete"]:
+        lines.append(f"  incomplete {span['start']}..{span['end']}: {span['reason']}")
+    for span in result["uncovered"]:
+        lines.append(f"  uncovered {span['start']}..{span['end']}")
+    return "\n".join(lines)
+
+
+def cmd_discord_fetch(args: argparse.Namespace) -> int:
+    until_raw = getattr(args, "until", None)
+    until = _fetch_mod.parse_until(until_raw) if until_raw else None
+    max_messages = getattr(args, "max_messages", None)
+    result = _fetch_mod.fetch_channel(args.channel_id, until=until, max_messages=max_messages)
+    for span in result["fetched"]:
+        emit_diagnostic(f"fetched {span['start']}..{span['end']}")
+    if not result["complete"]:
+        emit_diagnostic(f"fetch incomplete: {len(result['uncovered'])} span(s) still uncovered")
+    json_mode = bool(getattr(args, "json", False))
+    if json_mode:
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_fetch_text(result), json_mode=False)
+    return 0
+
+
+# -- purge -------------------------------------------------------------------
+
+
+def _purge_suppression_lines(result: dict, dry: bool) -> list[str]:
+    lines = ["coverage: unchanged (an author purge suppresses the author instead)"]
+    suppression = result.get("suppression") or {}
+    if dry:
+        lines.append("suppression: would record a keyed hash of the author id (not the id)")
+    elif suppression.get("already_present"):
+        lines.append("suppression: already recorded as a keyed hash of the author id")
+    else:
+        lines.append("suppression: recorded a keyed hash of the author id (not the id)")
+    return lines
+
+
+def _purge_coverage_line(target: dict, coverage: dict, dry: bool) -> str:
+    verb = "cleared" if target["kind"] == "channel" else "trimmed to the cutoff"
+    verb = f"would be {verb}" if dry else verb
+    return f"coverage: {verb} for {len(coverage['channels'])} channel(s)"
+
+
+def _purge_run_lines(reports: dict, dry: bool) -> list[str]:
+    listed = reports["runs_matched"] if dry else reports["runs_removed"]
+    verb = "would remove" if dry else "removed"
+    return [f"  {verb} {run}" for run in listed]
+
+
+def _purge_text(result: dict) -> str:
+    target = result["target"]
+    cache = result["cache"]
+    reports = result["reports"]
+    dry = result["dry_run"]
+    head = "dry run (nothing deleted; re-run with --yes to delete)" if dry else "purged"
+    shown = "(id withheld)" if target.get("withheld") else target["value"]
+    lines = [f"{head}: {target['kind']} {shown}"]
+    if "cutoff" in result:
+        lines.append(f"cutoff: messages created before {result['cutoff']}")
+    lines.append(f"cache: {cache['matched']} matched, {cache['deleted']} deleted")
+    lines.append(
+        f"reports: {reports['runs_scanned']} runs scanned, "
+        f"{len(reports['runs_matched'])} matched, {len(reports['runs_removed'])} removed"
+    )
+    coverage = result.get("coverage") or {"channels": []}
+    if target["kind"] == "author":
+        lines.extend(_purge_suppression_lines(result, dry))
+    else:
+        lines.append(_purge_coverage_line(target, coverage, dry))
+    lines.extend(_purge_run_lines(reports, dry))
+    return "\n".join(lines)
+
+
+def cmd_discord_purge(args: argparse.Namespace) -> int:
+    author = getattr(args, "author", None)
+    channel = getattr(args, "channel", None)
+    older_than = getattr(args, "older_than", None)
+    given = [v for v in (author, channel, older_than) if v is not None]
+    if len(given) != 1:
+        raise CliError(
+            EXIT_USER_ERROR,
+            "purge needs exactly one target: --author ID, --channel ID or --older-than DAYS",
+            "name the single author id, channel id or retention window to purge; "
+            "nothing is ever deleted without an explicit target",
+        )
+    dry_run = not bool(getattr(args, "yes", False))
+    if author is not None:
+        result = _purge_mod.purge_author(author, dry_run=dry_run)
+    elif channel is not None:
+        result = _purge_mod.purge_channel(channel, dry_run=dry_run)
+    else:
+        result = _purge_mod.purge_older_than(older_than, dry_run=dry_run)
+    if result["target"]["kind"] == "author":
+        # Risk r15: stdout/stderr end up in cron and shell logs, so the id of
+        # someone asking to be deleted is never echoed back. The operator
+        # already holds it; the cache keeps only its keyed hash.
+        result = {**result, "target": {"kind": "author", "value": None, "withheld": True}}
+    json_mode = bool(getattr(args, "json", False))
+    if json_mode:
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_purge_text(result), json_mode=False)
+    return 0
+
+
+# -- sweep -------------------------------------------------------------------
+
+
+def _sweep_text(result: dict) -> str:
+    head = "complete" if result["complete"] else "incomplete"
+    t = result["totals"]
+    lines = [
+        f"{head}: swept {result['channels_swept']} channel(s) — {t['updated']} updated, "
+        f"{t['added']} added, {t['deleted']} deleted, {t['purged']} purged"
+    ]
+    for row in result["channels"]:
+        cid = row["channel_id"]
+        if row["purged"]:
+            lines.append(
+                f"  channel {cid}: purged ({row['purge_reason']}), "
+                f"{row['deleted']} messages deleted"
+            )
+            continue
+        state = "complete" if row["complete"] else "incomplete"
+        lines.append(
+            f"  channel {cid}: {state}, {row['updated']} updated, {row['added']} added, "
+            f"{row['deleted']} deleted, {row['suppressed']} suppressed"
+        )
+        if row["error"]:
+            lines.append(f"    error: {row['error']}")
+        for span in row["incomplete"]:
+            lines.append(
+                f"    incomplete {span['start']}..{span['end']} (nothing deleted): {span['reason']}"
+            )
+    lines.append(f"probes reaped: {result['probes_reaped']}")
+    return "\n".join(lines)
+
+
+def cmd_discord_sweep(args: argparse.Namespace) -> int:
+    result = _sweep_mod.sweep()
+    if not result["complete"]:
+        emit_diagnostic(
+            "sweep incomplete: channel(s) "
+            + ", ".join(result["incomplete_channels"])
+            + " not fully reconciled; nothing was deleted in their incomplete spans"
+        )
+    if bool(getattr(args, "json", False)):
+        emit_result(result, json_mode=True)
+    else:
+        emit_result(_sweep_text(result), json_mode=False)
+    return 0
+
+
 # -- doctor -----------------------------------------------------------------
 
 
@@ -477,7 +660,21 @@ def cmd_discord_doctor(args: argparse.Namespace) -> int:
     if json_mode:
         emit_result(result, json_mode=True)
     else:
-        emit_result(f"ok: guild {result['guild_id']}", json_mode=False)
+        cache = result.get("cache") or {}
+        encryption = result.get("encryption") or {}
+        lines = [f"ok: guild {result['guild_id']}"]
+        if cache.get("reachable"):
+            lines.append(
+                f"ok: jlab-mongodb cache reachable at {cache.get('host')}:{cache.get('port')}"
+            )
+        if encryption.get("measured"):
+            # Measured, never assumed: a probe was stored, read back raw and
+            # found to contain no plaintext (see jlab.cache.measure_encryption).
+            lines.append(
+                "ok: cache content encryption measured by store/fetch probe "
+                f"({encryption.get('algorithm')}); key {encryption.get('key_fingerprint')}"
+            )
+        emit_result("\n".join(lines), json_mode=False)
     return 0
 
 
@@ -492,7 +689,8 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
             "title": "Verbs",
             "items": [
                 "channels [--all] — list guild channels (public-only by default)",
-                "read <channel_id> [--limit N] — read recent messages from a channel",
+                "read <channel_id> [--limit N] [--refresh] — read recent messages, "
+                "served from the cache (--refresh re-reads Discord first)",
                 "active [--since D] [--limit N] [--top K] [--preview P] "
                 "[--concurrency C] — rank active channels",
                 "members [--since D] [--concurrency C] [--include-departed] "
@@ -500,7 +698,20 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
                 "links [--since D] [--concurrency C] [--include-bots] "
                 "[--from-cache RUN] [--json] — scan + write a shared-address "
                 "HTML report and CSVs",
-                "doctor — verify token + guild readable",
+                "fetch <channel_id> [--until DATE] [--max-messages N] [--json] "
+                "— backward-page a public channel's missing history into the cache",
+                "search <channel_id> --grep PATTERN [--since TS --until TS] "
+                "[--max-matches N] [--timeout SECS] [--json] — regex search "
+                "the cached corpus (cache-served only, never contacts Discord)",
+                "purge (--author ID | --channel ID | --older-than DAYS) [--yes] "
+                "[--json] — delete from the cache and derived reports "
+                "(preview unless --yes)",
+                "sweep [--json] — daily reconciliation: re-verify visibility, "
+                "apply edits, remove deletions, purge channels no longer public",
+                "coverage [<channel_id>] [--since TS] [--until TS] — inspect "
+                "cache coverage metadata, never message content",
+                "doctor — verify token + guild readable, jlab-mongodb cache "
+                "reachable, and cache content encryption measured",
                 "overview — describe this noun group",
             ],
         },
@@ -525,7 +736,7 @@ def cmd_discord_overview(args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "discord",
-        help="Read-only Discord scan (channels, read, active, members, links, doctor).",
+        help="Discord scan (channels, read, active, members, links) + cache purge, doctor.",
     )
     p.add_argument("--json", action="store_true", help=_JSON_HELP)
     p.set_defaults(func=_no_verb, json=False)
@@ -547,17 +758,26 @@ def register(sub: argparse._SubParsersAction) -> None:
     # read
     rd = noun_sub.add_parser(
         "read",
-        help="Read recent messages from a channel.",
+        help="Read recent messages, served from the cache (--refresh re-reads Discord).",
     )
     rd.add_argument("channel_id", help="Numeric channel id.")
     rd.add_argument(
         "--limit",
         type=int,
         default=20,
-        help="Messages to fetch (1-100, default 20).",
+        help="Messages to fetch (default 20; no upper bound, pages past 100).",
+    )
+    rd.add_argument(
+        "--refresh",
+        action="store_true",
+        help=(
+            "Live re-read the window this call will serve, reconcile edits/"
+            "deletions into the cache, then serve from it. The only way "
+            "`read` contacts Discord."
+        ),
     )
     rd.add_argument("--json", action="store_true", help=_JSON_HELP)
-    rd.set_defaults(func=cmd_discord_read, json=False)
+    rd.set_defaults(func=cmd_discord_read, json=False, refresh=False)
 
     # active
     ac = noun_sub.add_parser(
@@ -692,6 +912,66 @@ def register(sub: argparse._SubParsersAction) -> None:
         include_bots=False,
         from_cache=None,
     )
+
+    # fetch
+    ft = noun_sub.add_parser(
+        "fetch",
+        help="Backward-page a public channel's missing history into the cache.",
+    )
+    ft.add_argument("channel_id", help="Numeric channel id.")
+    ft.add_argument(
+        "--until",
+        default=None,
+        help=(
+            "Drain backward until messages predate this ISO-8601 date "
+            "(default: the channel's beginning)."
+        ),
+    )
+    ft.add_argument(
+        "--max-messages",
+        dest="max_messages",
+        type=int,
+        default=None,
+        help="Total message budget for this run (default: unbounded).",
+    )
+    ft.add_argument("--json", action="store_true", help=_JSON_HELP)
+    ft.set_defaults(func=cmd_discord_fetch, json=False, until=None, max_messages=None)
+
+    # purge
+    pg = noun_sub.add_parser(
+        "purge",
+        help="Delete an author's or channel's data from the cache and derived reports.",
+    )
+    pg.add_argument("--author", default=None, help="Discord author id to purge.")
+    pg.add_argument("--channel", default=None, help="Discord channel id to purge.")
+    pg.add_argument(
+        "--older-than",
+        dest="older_than",
+        type=int,
+        default=None,
+        help="Retention bound: purge messages and report runs older than DAYS.",
+    )
+    pg.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually delete. Without it the verb only previews what would be removed.",
+    )
+    pg.add_argument("--json", action="store_true", help=_JSON_HELP)
+    pg.set_defaults(func=cmd_discord_purge, json=False, yes=False)
+
+    # sweep
+    sw = noun_sub.add_parser(
+        "sweep",
+        help="Reconcile the cache with Discord: edits, deletions, channels gone private.",
+    )
+    sw.add_argument("--json", action="store_true", help=_JSON_HELP)
+    sw.set_defaults(func=cmd_discord_sweep, json=False)
+
+    # coverage
+    _coverage_cmd.register(noun_sub)
+
+    # search
+    _search_cmd.register(noun_sub)
 
     # doctor
     dr = noun_sub.add_parser(

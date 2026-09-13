@@ -12,8 +12,8 @@ optional ``[discord]`` extra is absent. Both transport entry points
 ``CliError`` into jlab's so the 0/1/2 exit-code contract is preserved.
 
 Local workaround (upstream ``agentculture/discord-bot-cli#14``): the
-``author.bot`` flag, the display name, and ``after=``/time-window paging past
-the upstream 100-message cap are implemented **here**, against the raw
+``author.bot`` flag, the display name, and ``after=``/``before=``/time-window
+paging past the upstream 100-message cap are implemented **here**, against the raw
 discord.py objects the action closures already hold. They are deliberately
 confined to this one module so that dropping them for the upstream fields is a
 single-file change. The pieces to delete when #14 ships are marked
@@ -28,6 +28,8 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from jlab import cache as _cache
+from jlab import mongo as _mongo
 from jlab.cli._errors import CliError
 
 _GUILD_ID_DEFAULT = "1326246312072581160"
@@ -282,6 +284,7 @@ def _serialize_message(message: Any, channel: Any = None) -> dict:
     """
     message_id = getattr(message, "id", None)
     created = getattr(message, "created_at", None)
+    edited = getattr(message, "edited_at", None)
     channel = channel if channel is not None else getattr(message, "channel", None)
     thread = getattr(message, "thread", None)
     return {
@@ -289,6 +292,9 @@ def _serialize_message(message: Any, channel: Any = None) -> dict:
         "author": _serialize_author(message.author),
         "content": message.content,
         "created_at": created.isoformat() if created else None,
+        # Discord's edit timestamp, None when the message was never edited.
+        # The cache stores it as ``updated_at`` so an edit is detectable.
+        "edited_at": edited.isoformat() if edited else None,
         "channel": _serialize_channel_ref(channel),
         "jump_url": _jump_url(message, channel),
         "attachments": [
@@ -300,19 +306,41 @@ def _serialize_message(message: Any, channel: Any = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# WORKAROUND(discord-bot-cli#14) — after=/time-window paging past the 100 cap.
+# WORKAROUND(discord-bot-cli#14) — after=/before= paging past the 100 cap.
 # ---------------------------------------------------------------------------
 
+# Discord clamps a single history request to 100 messages. The forward
+# (``after=``) direction never has to care: discord.py pages internally for an
+# unbounded ``history(limit=None, after=...)``. The backward direction walks
+# pages explicitly so the cursor is jlab's own and can be asserted on, so it
+# needs the per-request page size as a number.
+_BACKWARD_PAGE_SIZE = 100
 
-def _history(channel: Any, *, limit: int | None, after: datetime | None) -> Any:
-    """Call ``channel.history``, passing ``after`` only when a window is set.
+
+def _history(
+    channel: Any,
+    *,
+    limit: int | None,
+    after: datetime | None,
+    before: Any | None = None,
+) -> Any:
+    """Call ``channel.history``, passing only the cursors that are set.
 
     discord.py paginates ``history(limit=None, after=<datetime>)`` for us, so
-    this is the whole of the "past the 100-message cap" story.
+    that is the whole of the forward "past the 100-message cap" story. A
+    ``before`` cursor is passed through the same way; the page walk that uses
+    it lives in :func:`_drain_backward`, which — deliberately — never sets
+    ``after`` and ``before`` in the same call (see its docstring, qodo
+    #3998468666). ``before`` may be a ``datetime`` (an initial window
+    boundary) or a message-like object with an ``id`` (a mid-walk cursor);
+    either is valid for discord.py's ``before=``.
     """
-    if after is None:
-        return channel.history(limit=limit)
-    return channel.history(limit=limit, after=after)
+    kwargs: dict[str, Any] = {"limit": limit}
+    if after is not None:
+        kwargs["after"] = after
+    if before is not None:
+        kwargs["before"] = before
+    return channel.history(**kwargs)
 
 
 def _retry_after(exc: Exception) -> float | None:
@@ -332,10 +360,159 @@ def _retry_after(exc: Exception) -> float | None:
     return min(delay, _RATE_LIMIT_MAX_DELAY)
 
 
-def _resume_cursor(collected: list, after: datetime | None) -> datetime | None:
-    """Where to resume paging after a retry: the newest message read so far."""
-    stamps = [m.created_at for m in collected if getattr(m, "created_at", None)]
-    return max(stamps) if stamps else after
+def _extreme_id_message(messages: list, *, want_min: bool) -> Any | None:
+    """The message with the smallest/largest ``id`` (a snowflake) in *messages*.
+
+    ``None`` if nothing in *messages* carries an ``id``. Comparing by id
+    rather than ``created_at`` matters at a page boundary: a ``datetime``
+    cursor is exclusive of its *whole* millisecond (qodo #3998468655), so two
+    messages sharing one would have the tied one silently skipped or
+    re-read. An id (a snowflake) is unique and strictly ordered by creation,
+    so it has no such tie.
+    """
+    candidates = [m for m in messages if getattr(m, "id", None) is not None]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda m: m.id) if want_min else max(candidates, key=lambda m: m.id)
+
+
+def _min_id_message(messages: list) -> Any | None:
+    """The message with the smallest ``id`` in *messages*, or ``None``."""
+    return _extreme_id_message(messages, want_min=True)
+
+
+def _max_id_message(messages: list) -> Any | None:
+    """The message with the largest ``id`` in *messages*, or ``None``."""
+    return _extreme_id_message(messages, want_min=False)
+
+
+def _resume_cursor(
+    collected: list,
+    fallback: Any,
+    *,
+    backward: bool = False,
+) -> Any:
+    """Where to resume paging after a retry, given the direction of travel.
+
+    Forward (``after=``) paging resumes from the NEWEST message read so far;
+    backward (``before=``) paging must resume from the OLDEST. Both resume by
+    the message itself (its id, a snowflake) rather than its ``created_at``
+    datetime — see :func:`_extreme_id_message` for why a datetime cursor is
+    the wrong tool here (qodo #3998468655). Using the wrong edge does not
+    error either way — it silently skips the unread remainder of the window
+    (backward) or re-reads it (forward), so the direction is load-bearing.
+    *fallback* is the caller's own cursor, used when nothing was read yet.
+    """
+    message = _min_id_message(collected) if backward else _max_id_message(collected)
+    return message if message is not None else fallback
+
+
+async def _drain_backward_page(
+    channel: Any,
+    *,
+    after: datetime | None,
+    cursor: Any,
+    page_size: int,
+    max_messages: int | None,
+    collected: list,
+) -> tuple[list, bool, bool]:
+    """Read one backward page into *collected*.
+
+    Returns ``(page, capped, floor_hit)``. ``after`` is never handed to
+    ``_history`` here — it is enforced client-side instead, message by
+    message, and the page stops the moment one is reached (see
+    :func:`_drain_backward`'s docstring for why). Since nothing is ever
+    filtered server-side by ``after``, this page is exactly the newest
+    ``page_size`` messages strictly older than *cursor* (or the newest
+    overall, when *cursor* is ``None``) — discord.py's default order for a
+    ``before=``-only call — so a message reached once ``after`` is crossed is
+    guaranteed to be the oldest remaining in the page: it is safe to stop
+    without reading the rest.
+    """
+    page: list = []
+    floor_hit = False
+    async for message in _history(channel, limit=page_size, after=None, before=cursor):
+        created = getattr(message, "created_at", None)
+        if after is not None and created is not None and created <= after:
+            floor_hit = True
+            break
+        page.append(message)
+        collected.append(message)
+        if max_messages is not None and len(collected) > max_messages:
+            # Overshoot by one, then drop it — see _drain.
+            collected.pop()
+            return page, True, floor_hit
+    return page, False, floor_hit
+
+
+def _next_backward_cursor(page: list, previous_id: Any) -> Any:
+    """The next ``before`` cursor: the message with the smallest id in *page*.
+
+    Raises when the page carries no advance over *previous_id* — a page that
+    came back full but did not move the cursor backwards would loop forever
+    otherwise; the caller turns that into a *partial* result carrying what
+    was already read.
+    """
+    oldest = _min_id_message(page)
+    if oldest is None or (previous_id is not None and oldest.id >= previous_id):
+        raise RuntimeError(
+            "backward cursor did not advance past "
+            f"{previous_id!r}; stopping rather than re-reading the same page"
+        )
+    return oldest
+
+
+async def _drain_backward(
+    channel: Any,
+    *,
+    limit: int | None,
+    after: datetime | None,
+    before: datetime | None,
+    max_messages: int | None,
+    collected: list,
+) -> bool:
+    """Walk ``history`` backwards page by page; ``True`` if the cap stopped it.
+
+    Each page is requested with ``before=<oldest message of the previous
+    page>``, so the cursor strictly decreases. ``after`` is deliberately
+    **never** passed to the same ``history()`` call as ``before`` (qodo
+    #3998468666): discord.py's ``Messageable.history`` defaults
+    ``oldest_first`` to ``after is not None``, and that default picks which
+    pagination *strategy* runs — an ``after``-anchored walk vs a
+    ``before``-anchored one — not merely the order messages come back in. If
+    both cursors were sent together, discord.py would silently run the
+    ``after``-anchored strategy and keep re-fetching the slice nearest
+    ``after`` while ``before`` never gets a turn, so the walk would report a
+    short page (and "complete") after caching only the oldest slice of the
+    window. The ``after`` floor is instead enforced client-side, page by
+    page, in :func:`_drain_backward_page`.
+
+    Three things end the walk: the ``after`` floor being crossed, a short
+    page (fewer messages than asked for — the window is exhausted), or the
+    *limit* total being reached.
+    """
+    cursor: Any = before
+    previous_id: Any = None
+    while True:
+        if limit is not None and len(collected) >= limit:
+            return False
+        page_size = _BACKWARD_PAGE_SIZE
+        if limit is not None:
+            page_size = min(page_size, limit - len(collected))
+        page, capped, floor_hit = await _drain_backward_page(
+            channel,
+            after=after,
+            cursor=cursor,
+            page_size=page_size,
+            max_messages=max_messages,
+            collected=collected,
+        )
+        if capped:
+            return True
+        if floor_hit or len(page) < page_size:
+            return False  # the after floor was crossed, or the window is exhausted
+        cursor = _next_backward_cursor(page, previous_id)
+        previous_id = cursor.id
 
 
 async def _drain(
@@ -343,11 +520,27 @@ async def _drain(
     *,
     limit: int | None,
     after: datetime | None,
+    before: datetime | None = None,
+    backward: bool = False,
     max_messages: int | None,
     collected: list,
 ) -> bool:
-    """Drain ``history`` into *collected*; return ``True`` if the cap stopped it."""
-    async for message in _history(channel, limit=limit, after=after):
+    """Drain ``history`` into *collected*; return ``True`` if the cap stopped it.
+
+    With *backward* set the read walks older, from *before* (or from the
+    newest message when *before* is ``None``) towards *after*; otherwise it is
+    the original forward drain, whose call shape is unchanged.
+    """
+    if backward:
+        return await _drain_backward(
+            channel,
+            limit=limit,
+            after=after,
+            before=before,
+            max_messages=max_messages,
+            collected=collected,
+        )
+    async for message in _history(channel, limit=limit, after=after, before=before):
         collected.append(message)
         if max_messages is not None and len(collected) > max_messages:
             # Overshoot by one, then drop it: hitting the cap exactly means the
@@ -359,14 +552,39 @@ async def _drain(
     return False
 
 
+def _retry_is_resumable(*, backward: bool, after: datetime | None, collected: list) -> bool:
+    """Whether a failed read can retry mid-stream rather than start over.
+
+    A backward walk always can (its cursor is the oldest message read so
+    far). An unwindowed forward one cannot — it would re-read from the top
+    and duplicate what is already collected.
+    """
+    return backward or after is not None or not collected
+
+
+def _retry_cursors(
+    *,
+    backward: bool,
+    collected: list,
+    after: datetime | None,
+    before: datetime | None,
+) -> tuple[datetime | None, Any]:
+    """The ``(after, before)`` cursor pair to resume paging with after a retry."""
+    if backward:
+        return after, _resume_cursor(collected, before, backward=True)
+    return _resume_cursor(collected, after), before
+
+
 async def _collect_history(
     channel: Any,
     *,
     limit: int | None,
     after: datetime | None,
+    before: datetime | None = None,
+    backward: bool = False,
     max_messages: int | None,
 ) -> tuple[list, bool, str | None]:
-    """Read a channel's history, paging the window.
+    """Read a channel's history, paging the window in either direction.
 
     Returns ``(messages, complete, reason)``. *complete* is ``False`` when the
     requested window could not be fully paged — the cap was hit, or a read
@@ -374,28 +592,31 @@ async def _collect_history(
     Raises when nothing at all could be read (the caller records ``failed``).
     """
     collected: list = []
-    cursor = after
+    after_cursor = after
+    before_cursor = before
     for attempt in range(_RATE_LIMIT_RETRIES + 1):
         try:
             capped = await _drain(
                 channel,
                 limit=limit,
-                after=cursor,
+                after=after_cursor,
+                before=before_cursor,
+                backward=backward,
                 max_messages=max_messages,
                 collected=collected,
             )
         except Exception as exc:  # noqa: BLE001
             delay = _retry_after(exc)
-            # Only a windowed read can resume mid-stream; an unwindowed one
-            # would re-read from the top and duplicate.
-            resumable = after is not None or not collected
-            if delay is not None and resumable and attempt < _RATE_LIMIT_RETRIES:
-                await _sleep(delay)
-                cursor = _resume_cursor(collected, after)
-                continue
-            if collected:
-                return collected, False, f"read failed after {len(collected)} messages: {exc}"
-            raise
+            resumable = _retry_is_resumable(backward=backward, after=after, collected=collected)
+            if delay is None or not resumable or attempt >= _RATE_LIMIT_RETRIES:
+                if collected:
+                    return collected, False, f"read failed after {len(collected)} messages: {exc}"
+                raise
+            await _sleep(delay)
+            after_cursor, before_cursor = _retry_cursors(
+                backward=backward, collected=collected, after=after, before=before
+            )
+            continue
         if capped:
             return (
                 collected,
@@ -414,23 +635,46 @@ def _ordered(messages: list) -> list:
     return stamped + unstamped
 
 
-def read_messages(channel_id: int, limit: int = 20) -> list[dict]:
-    """Read recent messages from a channel.
+def read_messages(channel_id: int, limit: int = 20) -> dict:
+    """Read a channel's most recent *limit* messages, oldest first.
 
-    *limit* must be between 1 and 100 inclusive.
+    *limit* has no upper bound: it is jlab's own bound, not a Discord one
+    (Discord clamps a single request to 100), so this pages backward through
+    :func:`_collect_history` past that cap exactly like :func:`scan_window`
+    already does. For a caller passing the default ``limit=20`` (or any
+    value <= 100) this issues the same single ``channel.history(limit=...)``
+    call as before, so the messages returned — and the text-mode lines —
+    are unchanged. The ``--json`` payload gained a ``complete`` field, an
+    additive change: JSON consumers see one extra key.
+
+    Returns ``{"messages": [...], "complete": bool, "reason": str | None}``.
+    ``complete`` is ``False`` when a rate limit or a hard failure kept the
+    requested window from being fully read — the caller must report that
+    rather than silently returning a truncated result.
     """
-    if not 1 <= limit <= 100:
+    if limit < 1:
         raise CliError(
             code=1,
-            message=f"--limit must be 1-100, got {limit}",
-            remediation="pass a value between 1 and 100",
+            message=f"--limit must be >= 1, got {limit}",
+            remediation="pass a positive integer",
         )
 
-    async def action(client: Any) -> list[dict]:
+    async def action(client: Any) -> dict:
         channel = await client.fetch_channel(channel_id)
-        collected = [m async for m in channel.history(limit=limit)]
+        collected, complete, reason = await _collect_history(
+            channel,
+            limit=limit,
+            after=None,
+            before=None,
+            backward=True,
+            max_messages=None,
+        )
         collected.reverse()  # history yields newest-first; emit oldest-first
-        return [_serialize_message(m, channel) for m in collected]
+        return {
+            "messages": [_serialize_message(m, channel) for m in collected],
+            "complete": complete,
+            "reason": reason,
+        }
 
     return _run(action)
 
@@ -681,9 +925,21 @@ def scan_window(
 
 
 def doctor(guild_id: int) -> dict:
-    """Verify token + importable + guild readable.
+    """Verify token + importable + guild readable, and the jlab-mongodb cache.
 
-    Raises :class:`CliError` on failure.
+    Raises :class:`CliError` on failure — from the existing token/extra/guild
+    checks, or from :func:`jlab.mongo.check_cache` when the paged-read cache
+    (jlab-mongodb) is absent, unreachable, or turns out not to be jlab's own
+    dedicated instance. Either failure exits code 2 with an actionable
+    ``hint:``; this function never returns a partial/silent result on
+    failure.
     """
     list_channels(guild_id)
-    return {"ok": True, "guild_id": str(guild_id)}
+    cache = _mongo.check_cache()
+    encryption = _cache.measure_encryption()
+    return {
+        "ok": True,
+        "guild_id": str(guild_id),
+        "cache": cache,
+        "encryption": encryption,
+    }

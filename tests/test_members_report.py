@@ -103,10 +103,20 @@ def test_no_script_tags_and_no_external_resources():
     assert "<iframe" not in lowered
 
 
-def test_runtime_dependencies_stay_empty():
+def test_runtime_dependencies_are_approved():
+    """Runtime deps are restricted to the approved allowlist.
+
+    Was ``test_runtime_dependencies_stay_empty``: the zero-dependency rule
+    became an approved-dependencies list when pymongo was taken on for the
+    cache. ``tests/test_dependencies.py`` is the authoritative check over
+    runtime *and* optional deps; this narrower guard stays because the
+    members/links report paths must not pull in runtime deps of their own.
+    """
+    from tests.test_dependencies import APPROVED_DEPENDENCIES, distribution_names
+
     root = Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["dependencies"] == []
+    assert distribution_names(data["project"]["dependencies"]) <= APPROVED_DEPENDENCIES
 
 
 # --- 2. escaping / hostile display name ---------------------------------

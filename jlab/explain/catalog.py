@@ -124,8 +124,9 @@ _DISCORD = """\
 # jetson-ai-lab-cli discord
 
 Read-only Discord noun group. Lists public channels, reads messages, ranks
-active channels, scans participation statistics, and verifies connectivity.
-Public channels only by default (`--all` is the sole private opt-in).
+active channels, scans participation statistics, inspects cache coverage, and
+verifies connectivity. Public channels only by default (`--all` is the sole
+private opt-in).
 
 ## Verbs
 
@@ -134,6 +135,16 @@ Public channels only by default (`--all` is the sole private opt-in).
 - `jetson-ai-lab-cli discord active [flags]` — rank active public channels by traffic.
 - `jetson-ai-lab-cli discord members [--since DAYS] [--json]` — scan participation statistics.
 - `jetson-ai-lab-cli discord links [--since DAYS] [--json]` — scan shared addresses.
+- `jetson-ai-lab-cli discord coverage [CHANNEL_ID] [--since] [--until]`
+  — inspect cache coverage metadata.
+- `jetson-ai-lab-cli discord fetch <channel_id> [--until DATE] [--max-messages N]` —
+  backward-page a public channel's missing history into the cache.
+- `jetson-ai-lab-cli discord search <channel_id> --grep PATTERN [--since --until]
+  [--max-matches N] [--timeout SECS]` — regex search over the cached corpus
+  (cache-served only, never contacts Discord).
+- `jetson-ai-lab-cli discord purge (--author ID | --channel ID | --older-than DAYS)
+  [--yes]` — delete from the cache and derived reports.
+- `jetson-ai-lab-cli discord sweep` — daily reconciliation of the cache with Discord.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
@@ -162,12 +173,38 @@ to include private/role-gated channels too.
 _DISCORD_READ = """\
 # jetson-ai-lab-cli discord read <channel_id>
 
-Read recent messages from a single channel. *limit* must be 1-100 (default 20).
+Read a single channel's most recent *limit* messages (default 20, no upper
+bound — pages past Discord's own 100-message-per-request cap).
+
+**Cache-served by default.** Without --refresh this NEVER contacts Discord:
+it serves the requested window from the local cache and reports whether that
+window is fully covered. On a covered window the output matches a live read;
+on an uncovered or partly covered window it reports the gap on stderr (plus
+`complete: false` and an additive `uncovered` list in --json) instead of
+returning an empty result that reads as "no messages".
+
+**--refresh is the only path that reaches Discord.** It is a live RE-read —
+not a gap-only fetch — of the window this call will serve (the most recent
+*limit* messages), so an edit or a deletion Discord already has, even inside
+an already-cached window, surfaces. That live read is reconciled into the
+cache (edits and new messages stored; a cached message Discord no longer has
+is deleted, and coverage widened, only when the re-read was complete) before
+serving from the cache, so the shape of the result is identical either way.
+Guild + public checks run before any history read (the same guards `discord
+fetch` uses); a private or another guild's channel is refused (exit 1)
+before any Discord read, leaking no name or content.
+
+The cache stores author name and display name encrypted alongside the body
+(deviation d4), so a cache-served message's `author.name`/`author.
+display_name` match a live read's; they are `None` only for a message
+cached before that change (never a guess), and text mode falls back to the
+raw author id only in that case.
 
 ## Usage
 
     jetson-ai-lab-cli discord read 1234567890
     jetson-ai-lab-cli discord read 1234567890 --limit 50
+    jetson-ai-lab-cli discord read 1234567890 --refresh
     jetson-ai-lab-cli discord read 1234567890 --json
 """
 
@@ -195,7 +232,19 @@ _DISCORD_DOCTOR = """\
 # jetson-ai-lab-cli discord doctor
 
 Verify the Discord bot token is set, ``discord-bot-cli`` is importable, and
-the guild is readable. Exits 2 on environment error.
+the guild is readable — plus, for the paged-read cache, that ``pymongo`` is
+installed and the jlab-mongodb instance named by ``JLAB_MONGO_URI`` is
+reachable and is genuinely jlab's own dedicated instance (never the legacy
+qq-mongodb on 27017 or the eidetic-mongo memory store on 27018). Exits 2 on
+any environment error, including an absent or unreachable cache — never a
+silent empty result.
+
+It also **measures** the cache's application-level content encryption rather
+than assuming it: a marked probe document is written through the real store
+path, read straight back out of the collection *without* decrypting, and
+checked for the marker. A plaintext hit, or an absent ``JLAB_CACHE_KEY``,
+exits 2. The reported line describes what was measured, not what was
+configured.
 
 ## Usage
 
@@ -273,6 +322,183 @@ message is the jump link in the same row, which is always live.
 """
 
 
+_DISCORD_COVERAGE = """\
+# jetson-ai-lab-cli discord coverage
+
+Inspect what time windows the jlab message cache holds for a channel, without
+opening MongoDB or decrypting message content. Coverage is the cache's central
+invariant: every incremental-fetch and gap-reporting guarantee depends on it.
+
+Omit the channel id to list all channels with coverage records. Pass a channel
+id to show what intervals the cache covers for that channel. With `--since` and
+`--until` (ISO-8601 timestamps), show covered and uncovered spans within that
+time window and whether the window is fully cached (complete) or has gaps.
+`--since`/`--until` require a channel id — passing either without one is a
+code-1 error rather than being silently ignored while the channel list prints.
+
+Without a time window, the verb shows the recorded intervals and notes that
+completeness requires a window. With a window, it shows both covered spans and
+the gaps between them.
+
+## Usage
+
+    jetson-ai-lab-cli discord coverage
+    jetson-ai-lab-cli discord coverage 123456789012345678
+    jetson-ai-lab-cli discord coverage 123456789012345678 \\
+      --since 2026-09-01T00:00:00+00:00 --until 2026-09-15T00:00:00+00:00
+    jetson-ai-lab-cli discord coverage 123456789012345678 --json
+"""
+
+
+_DISCORD_FETCH = """\
+# jetson-ai-lab-cli discord fetch <channel_id>
+
+Backward-page a public channel's history past the 100-message cap into the
+encrypted jlab-mongodb cache — the write path behind `discord read`'s cache
+and `discord search`'s corpus. Only the parts of the requested window that
+`jlab.coverage` does not already hold are fetched; a repeat run against a
+window already covered requests nothing.
+
+The public check (`_channel_public`, the same one every other verb uses) is
+re-applied to the id you pass, before any history request — fetching a
+private or role-gated channel by explicit id is refused (exit 1), never
+served.
+
+`--until DATE` bounds how far back the drain goes (default: the channel's
+beginning, Discord's own epoch); `--max-messages N` bounds the TOTAL messages
+fetched this invocation (default: unbounded). Both only bound the window and
+budget — coverage decides what is actually requested. The result reports
+`stored` and `suppressed` message counts, which spans were `fetched` vs
+already `covered`, and any `incomplete` or `uncovered` spans honestly, never
+presenting a partial drain as complete.
+
+## Usage
+
+    jetson-ai-lab-cli discord fetch 1234567890
+    jetson-ai-lab-cli discord fetch 1234567890 --until 2026-01-01
+    jetson-ai-lab-cli discord fetch 1234567890 --max-messages 5000
+    jetson-ai-lab-cli discord fetch 1234567890 --json
+"""
+
+_DISCORD_SEARCH = """\
+# jetson-ai-lab-cli discord search <channel_id> --grep PATTERN
+
+Regex-search a channel's cached corpus. **Cache-served only** — this verb
+never opens a Discord session; it answers from whatever `discord fetch` has
+already written and points at `fetch` for gaps rather than reaching for the
+network itself.
+
+`--grep` is compiled up front, before any cache is opened: a malformed
+pattern exits 1 (`error:`/`hint:`, no traceback) before Mongo is ever touched.
+
+`--since`/`--until` (ISO-8601) bound the search window — both or neither; a
+lone bound exits 1. With neither given, the window defaults to the channel's
+whole possible history (Discord's epoch through now), the same default
+`discord fetch` drains to. The result always reports `complete` and
+`uncovered` from the recorded cache coverage: a channel with no coverage at
+all comes back `complete: false` with the whole window listed as uncovered,
+never as a bare "no matches".
+
+**Execution bound.** A well-formed but pathological pattern (catastrophic
+backtracking, e.g. `(a+)+$` against a long run of `a`s) cannot be interrupted
+by Python's `re` once running, so matching happens in a forked child process
+under a wall-clock `--timeout` (seconds; declared, sane default). If the
+bound fires before matching finishes, the result carries `bounded: true` and
+a diagnostic — never an empty result that reads as "no matches"; whatever
+matched before the cutoff is still returned. `--max-matches N` stops the scan
+early and reports `truncated: true`, which is a distinct condition from
+`bounded`.
+
+Output per match: message id, `created_at`, `author_id`, `author_name` (the
+cache's own decrypted, stored name — deviation d4 — `None` only for a
+message cached before that; still no live Discord call, since the name
+comes from the cache, never a fresh lookup), `jump_url`, and `content`.
+
+## Usage
+
+    jetson-ai-lab-cli discord search 1234567890 --grep "September"
+    jetson-ai-lab-cli discord search 1234567890 --grep "error" \\
+      --since 2026-09-01T00:00:00+00:00 --until 2026-09-15T00:00:00+00:00
+    jetson-ai-lab-cli discord search 1234567890 --grep "foo" --max-matches 20
+    jetson-ai-lab-cli discord search 1234567890 --grep "foo" --timeout 2 --json
+"""
+
+_DISCORD_PURGE = """\
+# jetson-ai-lab-cli discord purge
+
+Delete data from jlab's message cache **and** from every derived report that
+carries it — the runnable deletion path behind the privacy policy's promise
+to honour deletion requests, including derived indexes. Exactly one target is
+required:
+
+- `--author ID` — every cached message by that Discord author id, plus every
+  members/links report run whose artifacts mention the id;
+- `--channel ID` — every cached message from that channel, plus every report
+  run whose artifacts carry the channel id (links jump URLs);
+- `--older-than DAYS` — the retention bound: cached messages created, and
+  report runs written, more than DAYS ago.
+
+Safety: targets must be bare numeric ids (empty, wildcard and pattern targets
+exit 1 before anything is touched). **Without `--yes` the verb is a dry run**
+that reports what would be removed; with `--yes` it deletes and reports
+exactly what was removed. A report run is removed whole, never edited, because
+it is one rendered artifact set and is regenerable by re-running its verb.
+Re-running a purge is safe (idempotent).
+
+Coverage stays honest: `--channel` also clears that channel's cache coverage,
+and `--older-than` trims every channel's coverage to the cutoff, so a purged
+window reads back as a gap rather than as complete. Both run under the
+channel's coverage lock (one channel at a time), waiting for an in-flight
+fetch of that channel. `--author` leaves coverage unchanged and instead
+records the author in a suppression list, so no later fetch or sweep caches
+their messages again. The list keeps only a **keyed hash** of the author id
+(HMAC-SHA256 under a key derived from `JLAB_CACHE_KEY`), never the id itself;
+without the key the purge exits 2 before deleting anything. `--json` adds
+`coverage` (`channels`, `applied`) and, for `--author`, `suppression`
+(`recorded`, `already_present`). A dry run records and changes nothing.
+
+## Usage
+
+    jetson-ai-lab-cli discord purge --author 123456789012345678
+    jetson-ai-lab-cli discord purge --author 123456789012345678 --yes
+    jetson-ai-lab-cli discord purge --channel 123456789012345678 --yes --json
+    jetson-ai-lab-cli discord purge --older-than 365 --yes
+"""
+
+_DISCORD_SWEEP = """\
+# jetson-ai-lab-cli discord sweep
+
+The daily reconciliation pass over the message cache — one idempotent run,
+meant for cron or a systemd timer (jlab builds no scheduler). For every
+channel with cache coverage, one channel at a time under that channel's lock:
+
+- **Visibility is re-verified live.** A channel that no longer exists, is
+  forbidden to the bot, has moved to another guild, or is no longer public
+  (the same `_channel_public` test `fetch` uses) has its cached content,
+  coverage and derived report runs purged. It is reported by id only. Any
+  other failure to re-verify purges nothing and marks the channel incomplete.
+- **Every covered span is re-read** from Discord. Edited messages are
+  rewritten so the cache keeps the latest version (suppressed authors are
+  never re-cached); messages Discord no longer has are deleted — **only**
+  inside a span re-read completely. A rate limit is waited out and resumed;
+  a span still cut short deletes nothing, is listed under `incomplete`, and
+  keeps its coverage so the next sweep retries it.
+- Leftover encryption-probe documents older than an hour are removed.
+
+Exits 2 before any Discord request when `JLAB_CACHE_KEY` or `JLAB_MONGO_URI`
+is missing. An incomplete sweep still exits 0 but reports `complete: false`,
+`incomplete_channels`, and each channel's incomplete spans (also on stderr).
+`--json` reports `totals` and, per channel, `updated`, `added`, `deleted`,
+`suppressed`, `purged`, `purge_reason`, `complete`, `incomplete` and `error`.
+The verb takes no target and no other flags.
+
+## Usage
+
+    jetson-ai-lab-cli discord sweep
+    jetson-ai-lab-cli discord sweep --json
+"""
+
+
 ENTRIES: dict[tuple[str, ...], str] = {
     (): _ROOT,
     # Console-script name (pyproject [project.scripts]); the rubric derives the
@@ -292,6 +518,11 @@ ENTRIES: dict[tuple[str, ...], str] = {
     ("discord", "active"): _DISCORD_ACTIVE,
     ("discord", "members"): _DISCORD_MEMBERS,
     ("discord", "links"): _DISCORD_LINKS,
+    ("discord", "coverage"): _DISCORD_COVERAGE,
+    ("discord", "fetch"): _DISCORD_FETCH,
+    ("discord", "search"): _DISCORD_SEARCH,
+    ("discord", "purge"): _DISCORD_PURGE,
+    ("discord", "sweep"): _DISCORD_SWEEP,
     ("discord", "doctor"): _DISCORD_DOCTOR,
     ("discord", "overview"): _DISCORD_OVERVIEW,
 }

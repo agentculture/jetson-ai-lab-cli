@@ -174,28 +174,33 @@ def test_discord_read_json(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """t9: read is cache-served by default — the CLI now calls jlab.read.serve_read."""
     canned = [
         {
             "id": "msg1",
-            "author": {"id": "a1", "name": "alice"},
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
             "content": "hello",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     ]
     monkeypatch.setattr(
-        "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: canned,
-    )
-    monkeypatch.setattr(
-        "jlab.cli._discord.parse_id",
-        lambda value, label: int(value),
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "123",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
     )
     rc = main(["discord", "read", "123", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["channel_id"] == "123"
     assert len(payload["messages"]) == 1
-    assert payload["messages"][0]["author"]["name"] == "alice"
+    assert payload["messages"][0]["content"] == "hello"
+    assert payload["complete"] is True
+    assert set(payload) == {"channel_id", "messages", "complete"}  # additive uncovered key omitted
 
 
 def test_discord_read_text(
@@ -205,24 +210,61 @@ def test_discord_read_text(
     canned = [
         {
             "id": "msg1",
-            "author": {"id": "a1", "name": "bob"},
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
             "content": "world",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     ]
     monkeypatch.setattr(
-        "jlab.cli._discord.read_messages",
-        lambda channel_id, limit=20: canned,
-    )
-    monkeypatch.setattr(
-        "jlab.cli._discord.parse_id",
-        lambda value, label: int(value),
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "456",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
     )
     rc = main(["discord", "read", "456"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "bob" in out
+    # No resolved name in the cache: text mode falls back to the raw author id.
+    assert "a1" in out
     assert "world" in out
+
+
+def test_discord_read_incomplete_reports_gap_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A truncated read is reported, not silently served as if complete."""
+    canned = [
+        {
+            "id": "msg1",
+            "author": {"id": "a1", "name": None, "display_name": None, "bot": False},
+            "content": "world",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "456",
+            "messages": canned,
+            "complete": False,
+            "reason": "rate limited: retries exhausted",
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
+        },
+    )
+    rc = main(["discord", "read", "456", "--json"])
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["complete"] is False
+    assert payload["uncovered"]  # additive: present only when incomplete
+    assert "rate limited" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -695,17 +737,232 @@ def test_read_messages_serializes(monkeypatch: pytest.MonkeyPatch) -> None:
         [_FakeMsg("m0", "ann", "first", now), _FakeMsg("m1", "bob", "second", now)],
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msgs = _discord.read_messages(999, limit=5)
+    result = _discord.read_messages(999, limit=5)
+    msgs = result["messages"]
     assert [m["author"]["name"] for m in msgs] == ["ann", "bob"]  # oldest-first
     assert msgs[0]["content"] == "first"
     assert msgs[0]["created_at"] is not None
+    assert result["complete"] is True
+    assert result["reason"] is None
 
 
 def test_read_messages_rejects_bad_limit() -> None:
-    for bad in (0, 101):
+    for bad in (0, -1):
         with pytest.raises(CliError) as exc:
             _discord.read_messages(999, limit=bad)
         assert exc.value.code == 1
+
+
+def test_read_messages_no_longer_caps_at_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old 1-100 ceiling was jlab's own bound, not Discord's; it is lifted."""
+    chan = _BackwardChannel("c1", "deep", _window_msgs(250))
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+    result = _discord.read_messages(999, limit=250)
+    assert len(result["messages"]) == 250
+    assert result["complete"] is True
+    # 100 + 100 + 50: paging past the 100-message cap actually happened.
+    assert len(chan.history_calls) == 3
+    ids = [m["id"] for m in result["messages"]]
+    assert len(set(ids)) == 250
+
+
+def _two_message_channel() -> "_FakeChannel":
+    # A fixed instant: the text test builds this channel twice and compares
+    # timestamps across the two reads, so datetime.now() would never match.
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    return _FakeChannel(
+        "c1",
+        "general",
+        "text",
+        True,
+        [_FakeMsg("m0", "ann", "hello", now), _FakeMsg("m1", "bob", "world", now)],
+    )
+
+
+def _canned_cache_messages() -> list[dict]:
+    now = "2026-09-01T12:00:00+00:00"
+    return [
+        {
+            "id": "m0",
+            "author": {"id": "m0a", "name": None, "display_name": None, "bot": False},
+            "content": "hello",
+            "created_at": now,
+            "edited_at": None,
+            "channel": {"id": "999"},
+            "jump_url": None,
+            "attachments": [],
+            "embeds": [],
+            "thread": {},
+        },
+        {
+            "id": "m1",
+            "author": {"id": "m1a", "name": None, "display_name": None, "bot": False},
+            "content": "world",
+            "created_at": now,
+            "edited_at": None,
+            "channel": {"id": "999"},
+            "jump_url": None,
+            "attachments": [],
+            "embeds": [],
+            "thread": {},
+        },
+    ]
+
+
+def test_read_default_limit_text_lines_are_the_same_messages_in_the_same_format(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """t9: read is cache-served by default; text mode still prints one
+    ``[ts] author: content`` line per message. Since the cache never stores a
+    resolved display name, the id stands in for ``author`` — this pins the
+    exact lines so a format change fails.
+    """
+    canned = _canned_cache_messages()
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
+    )
+
+    rc = main(["discord", "read", "999"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""  # complete: nothing diagnostic to report
+    assert captured.out.strip("\n").split("\n") == [
+        "[2026-09-01T12:00:00+00:00] m0a: hello",
+        "[2026-09-01T12:00:00+00:00] m1a: world",
+    ]
+
+
+def test_read_json_adds_complete_as_an_additive_field(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--json keeps ``channel_id`` and ``messages`` and adds ``complete`` (t4, recorded as r17)."""
+    canned = _canned_cache_messages()
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": True,
+            "reason": None,
+            "uncovered": [],
+        },
+    )
+
+    assert main(["discord", "read", "999", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert set(payload) == {"channel_id", "messages", "complete"}
+    assert payload["complete"] is True
+    assert [m["content"] for m in payload["messages"]] == ["hello", "world"]
+
+
+def test_read_messages_429_mid_drain_retries_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """o5: a 429 mid-drain is retried with clamped backoff and resumed."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+    msgs = _window_msgs(250)
+    chan = _BackwardRateLimitedOnceChannel("c1", "deep", msgs)
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+
+    result = _discord.read_messages(999, limit=250)
+
+    assert slept == [0.25]  # the server's own retry_after, clamped and honoured
+    assert result["complete"] is True
+    assert result["reason"] is None
+    ids = [m["id"] for m in result["messages"]]
+    assert len(set(ids)) == 250
+    assert sorted(ids) == sorted(m.id for m in msgs)
+
+
+def test_read_messages_reports_incomplete_rather_than_truncating_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """o5: a mid-drain failure is reported as incomplete, not served as if whole."""
+
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("c1", "deep", _window_msgs(250))
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
+
+    result = _discord.read_messages(999, limit=250)
+
+    assert result["complete"] is False
+    assert "connection reset" in result["reason"]
+    assert len(result["messages"]) == 100
+
+
+def test_discord_read_cli_reports_incomplete_on_stderr_not_silent_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """o5/o21 at the CLI boundary: the verb surfaces the gap, not an empty/quiet result.
+
+    Previously this drove a mid-drain failure through the live seam; ``read``
+    is cache-served now, so the CLI-boundary contract (partial messages kept,
+    stderr names the gap, no ``error:`` prefix) is exercised against
+    ``jlab.read.serve_read`` directly instead.
+    """
+    canned = _canned_cache_messages()[:1]  # what WAS read, not silently dropped
+    monkeypatch.setattr(
+        "jlab.read.serve_read",
+        lambda channel_id_raw, *, limit=20, refresh=False: {
+            "channel_id": "999",
+            "messages": canned,
+            "complete": False,
+            "reason": "read failed after 1 messages: connection reset",
+            "uncovered": [
+                {"start": "2026-01-01T00:00:00+00:00", "end": "2026-01-02T00:00:00+00:00"}
+            ],
+        },
+    )
+
+    rc = main(["discord", "read", "999", "--limit", "250", "--json"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["complete"] is False
+    assert len(payload["messages"]) == 1  # what WAS read, not silently dropped
+    assert payload["uncovered"]
+    assert "error:" not in captured.err  # not a hard failure, still a reported gap
+    assert "connection reset" in captured.err
 
 
 def test_parse_id_happy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -733,7 +990,133 @@ def test_guild_id_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_doctor_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
-    assert _discord.doctor(123) == {"ok": True, "guild_id": "123"}
+    cache_status = {"reachable": True, "host": "localhost", "port": 27019}
+    monkeypatch.setattr(_discord._mongo, "check_cache", lambda: cache_status)
+    # Encryption is *measured* (a store/fetch probe against the live
+    # collection), so doctor's happy path is stubbed here the same way the
+    # cache reachability check is — see tests/test_cache.py for the measurement.
+    encryption = {"encrypted": True, "measured": True, "algorithm": "x", "method": "probe"}
+    monkeypatch.setattr(_discord._cache, "measure_encryption", lambda: encryption)
+    assert _discord.doctor(123) == {
+        "ok": True,
+        "guild_id": "123",
+        "cache": cache_status,
+        "encryption": encryption,
+    }
+
+
+def test_doctor_propagates_unreachable_cache_as_env_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A down/absent jlab-mongodb fails `discord doctor` at code 2, not silently."""
+    guild = _FakeGuild([_FakeChannel("c1", "general", "text", True, [])])
+    monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(guild))
+
+    def _boom() -> None:
+        raise CliError(
+            code=2,
+            message="jlab-mongodb is unreachable at the configured URI: boom",
+            remediation="start the jlab-mongodb container and verify JLAB_MONGO_URI",
+        )
+
+    monkeypatch.setattr(_discord._mongo, "check_cache", _boom)
+    with pytest.raises(CliError) as exc:
+        _discord.doctor(123)
+    assert exc.value.code == 2
+    assert exc.value.remediation
+
+
+def test_discord_doctor_cli_exits_2_on_unreachable_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`jlab discord doctor` surfaces a down cache as a code-2 CLI error, never a traceback."""
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+
+    def _boom(guild_id: int) -> dict:
+        raise CliError(
+            code=2,
+            message="jlab-mongodb is unreachable at the configured URI: boom",
+            remediation="start the jlab-mongodb container and verify JLAB_MONGO_URI",
+        )
+
+    monkeypatch.setattr("jlab.cli._discord.doctor", _boom)
+    rc = main(["discord", "doctor"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "hint:" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_discord_doctor_text_reports_cache_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True, "host": "localhost", "port": 27019},
+        },
+    )
+    rc = main(["discord", "doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "jlab-mongodb" in out
+    assert "27019" in out
+
+
+def test_discord_doctor_text_reports_encryption_as_measured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """o16: doctor says encryption was *measured*, and names the construction."""
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True, "host": "localhost", "port": 27019},
+            "encryption": {
+                "encrypted": True,
+                "measured": True,
+                "method": "store/fetch probe",
+                "algorithm": "AES-256-GCM",
+                "key_fingerprint": "deadbeef",
+            },
+        },
+    )
+    rc = main(["discord", "doctor"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "encryption measured" in out
+    assert "AES-256-GCM" in out
+    assert "deadbeef" in out
+
+
+def test_discord_doctor_json_carries_the_encryption_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("jlab.cli._discord._guild_id", lambda: _GUILD_ID)
+    monkeypatch.setattr(
+        "jlab.cli._discord.doctor",
+        lambda guild_id: {
+            "ok": True,
+            "guild_id": str(guild_id),
+            "cache": {"reachable": True},
+            "encryption": {"encrypted": True, "measured": True},
+        },
+    )
+    rc = main(["discord", "doctor", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["encryption"] == {"encrypted": True, "measured": True}
 
 
 # ---------------------------------------------------------------------------
@@ -1057,9 +1440,18 @@ class _WindowChannel:
 
 
 def _window_msgs(n: int, *, author: str = "ann", bot: bool = False) -> list:
+    """*n* oldest-first fake messages with zero-padded, sortable string ids.
+
+    Real discord.py ids are integer snowflakes that sort the same way
+    lexicographically or numerically; zero-padding here keeps that property
+    for a fake id like ``"ann7"`` vs ``"ann70"``, which would otherwise sort
+    as a string in the wrong order the moment a window passes 10 messages —
+    exactly the id-ordered cursor logic this module's backward-paging tests
+    exercise (:func:`jlab.cli._discord._min_id_message`).
+    """
     now = datetime.now(timezone.utc)
     return [
-        _FakeMsg(f"{author}{i}", author, f"m{i}", now - timedelta(minutes=n - i), bot=bot)
+        _FakeMsg(f"{author}{i:06d}", author, f"m{i}", now - timedelta(minutes=n - i), bot=bot)
         for i in range(n)
     ]
 
@@ -1420,7 +1812,7 @@ def test_read_messages_author_carries_bot_and_display_name(
         "c1", "general", "text", True, [_FakeMsg("m0", "ann", "hi", now, global_name="Ann")]
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msgs = _discord.read_messages(999, limit=5)
+    msgs = _discord.read_messages(999, limit=5)["messages"]
     assert msgs[0]["author"]["bot"] is False
     assert msgs[0]["author"]["display_name"] == "Ann"
     assert msgs[0]["author"]["name"] == "ann"  # existing key preserved
@@ -1678,7 +2070,7 @@ def test_read_messages_carries_links_and_channel(monkeypatch: pytest.MonkeyPatch
         ],
     )
     monkeypatch.setattr(_discord, "_seam", lambda: _FakeSeam(channel=chan))
-    msg = _discord.read_messages(999, limit=5)[0]
+    msg = _discord.read_messages(999, limit=5)["messages"][0]
     assert msg["attachments"][0]["url"] == "https://cdn/n.png"
     assert msg["embeds"][0]["url"] == "https://example.org"
     assert msg["jump_url"] == "https://discord.com/channels/1/c1/m0"
@@ -1712,3 +2104,469 @@ def test_serialize_message_jump_url_built_from_ids_when_absent() -> None:
     chan.guild = _GuildRef()
     out = _serialize(_FakeMsg("m11", "ann", "hi", datetime.now(timezone.utc)), channel=chan)
     assert out["jump_url"] == "https://discord.com/channels/9/c1/m11"
+
+
+# ---------------------------------------------------------------------------
+# t3 — the BACKWARD (older-direction) cursor.
+#
+# Forward paging leans on discord.py's own pagination: one
+# ``history(limit=None, after=<cutoff>)`` call yields the whole window. The
+# backward drain cannot: it walks *pages*, moving a ``before`` cursor to the
+# oldest message of each page. The specific failure this section exists to
+# rule out is a cursor that never advances — a loop that re-requests page 1
+# forever. Every test below therefore asserts on the SEQUENCE of cursors the
+# channel was asked for, not merely on the final message count.
+#
+# Fake discord.py-shaped objects only; nothing here touches Discord.
+# ---------------------------------------------------------------------------
+
+
+class _BackwardChannel:
+    """A channel whose ``history`` honours ``before`` and caps each page.
+
+    Real Discord clamps a single history request to 100 messages and
+    discord.py pages internally; this fake models the per-request cap
+    explicitly so a jlab-side cursor bug cannot hide behind the library.
+    Messages are yielded NEWEST-first, as Discord does.
+    """
+
+    page_cap = _discord._BACKWARD_PAGE_SIZE
+
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        messages: list,
+        *,
+        public: bool = True,
+        guild_id: int | None = None,
+    ) -> None:
+        self.id = id
+        self.name = name
+        self.guild = types.SimpleNamespace(
+            id=int(guild_id if guild_id is not None else _discord._GUILD_ID_DEFAULT)
+        )
+        self.type = _FakeType("text")
+        self._public = public
+        self._messages = messages  # oldest-first
+        self.history_calls: list[dict] = []
+
+    def permissions_for(self, _role: object) -> _FakePerms:
+        return _FakePerms(self._public)
+
+    @staticmethod
+    def _cursor_created_at(cursor):
+        """Normalize a ``before``/``after`` cursor to a ``created_at``.
+
+        A cursor here is either the caller's original ``datetime`` window
+        boundary, or (once the backward walk has advanced) the message object
+        jlab now uses instead. This fixture assigns ids in the same
+        increasing order as timestamps with no ties, so filtering by the
+        cursor message's own timestamp is equivalent to filtering by id.
+        """
+        if cursor is None:
+            return None
+        return getattr(cursor, "created_at", cursor)
+
+    def _page(self, limit, after, before) -> list:
+        before_ts = self._cursor_created_at(before)
+        selected = [m for m in self._messages if before_ts is None or m.created_at < before_ts]
+        if after is not None:
+            selected = [m for m in selected if m.created_at > after]
+        newest_first = list(reversed(selected))
+        cap = self.page_cap if limit is None else min(limit, self.page_cap)
+        return newest_first[:cap]
+
+    def history(self, limit=None, after=None, before=None):
+        self.history_calls.append({"limit": limit, "after": after, "before": before})
+        page = self._page(limit, after, before)
+
+        async def _gen():
+            for m in page:
+                yield m
+
+        return _gen()
+
+
+# ---------------------------------------------------------------------------
+# discord-bot-cli#20 — the roleless "unavailable" guild stub.
+#
+# discord_bot_cli's client runs gateway-less (``Intents.none()``, REST only),
+# so discord.py's internal guild cache is always empty. ``Client.
+# fetch_channel()`` resolves a fetched channel's ``.guild`` via
+# ``ConnectionState._get_or_create_unavailable_guild`` — finding nothing
+# cached, it synthesizes an "unavailable" stub ``Guild`` whose id is correct
+# but whose roles are never populated, so its ``default_role`` is ``None``.
+# Real discord.py's ``permissions_for`` reads
+# ``Permissions(self.guild.default_role.permissions.value)`` as its base, so
+# a ``None`` default_role collapses every permission to false — every real
+# public channel reads as private. ``Client.fetch_guild()`` returns a
+# properly populated guild instead (default_role set, from real role data).
+# These fakes model that shape precisely, rather than a bare public/private
+# flag, so a regression here is caught even if a future change re-derives
+# the public check from ``permissions_for`` in a way a flag-based fake could
+# not expose.
+# ---------------------------------------------------------------------------
+
+
+class _UnavailableGuildStub:
+    """The roleless stub ``fetch_channel()`` attaches: correct id, no roles."""
+
+    def __init__(self, id: int) -> None:
+        self.id = id
+        self.default_role = None
+
+
+class _RealisticChannel(_BackwardChannel):
+    """A channel whose ``permissions_for`` behaves like real discord.py's:
+    it reads ``self.guild.default_role``, never a bare ``public`` flag.
+
+    Starts out carrying an :class:`_UnavailableGuildStub` as ``.guild`` —
+    exactly what a raw ``fetch_channel()`` call would attach — so a caller
+    that checks permissions against ``channel.guild`` as fetched sees
+    "not public" every time, and only a caller that resolves against the
+    separately-fetched, fully-populated guild sees the true, public answer.
+    """
+
+    def __init__(self, id: str, name: str, messages: list, *, guild_id: int | None = None) -> None:
+        super().__init__(id, name, messages, public=True, guild_id=guild_id)
+        self.guild = _UnavailableGuildStub(
+            int(guild_id if guild_id is not None else _discord._GUILD_ID_DEFAULT)
+        )
+
+    def permissions_for(self, _everyone: object) -> _FakePerms:
+        # Real discord.py: Permissions(self.guild.default_role.permissions...)
+        # — a None default_role means no usable base permissions.
+        return _FakePerms(self.guild.default_role is not None)
+
+
+def _before_cursors(chan) -> list:
+    return [call["before"] for call in chan.history_calls]
+
+
+# -- 1. the loop advances ----------------------------------------------------
+
+
+def test_backward_drain_pages_past_one_page_and_advances_its_cursor() -> None:
+    """250 messages over a 100-per-page channel: three pages, cursor advancing."""
+    msgs = _window_msgs(250)  # oldest-first
+    chan = _BackwardChannel("c1", "deep", msgs)
+
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+
+    assert complete is True
+    assert reason is None
+    assert len(messages) == 250
+    # No message is read twice — a stuck cursor would duplicate page 1.
+    ids = [m.id for m in messages]
+    assert len(set(ids)) == 250
+    assert sorted(ids) == sorted(m.id for m in msgs)
+    # 100 + 100 + 50: the short third page ends the drain.
+    assert len(chan.history_calls) == 3
+    cursors = _before_cursors(chan)
+    assert cursors[0] is None  # first page starts at the newest message
+    # STRICTLY decreasing (by id, a snowflake, not created_at — qodo
+    # #3998468655): the assertion that rules out a re-fetch loop.
+    assert cursors[1].id > cursors[2].id
+    assert cursors[1] is msgs[150]  # oldest of page 1 (msgs 249..150)
+    assert cursors[2] is msgs[50]  # oldest of page 2 (msgs 149..50)
+
+
+def test_backward_drain_reads_a_channel_shallower_than_one_page_in_one_call() -> None:
+    chan = _BackwardChannel("c1", "quiet", _window_msgs(7))
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+    assert complete is True
+    assert reason is None
+    assert len(messages) == 7
+    assert len(chan.history_calls) == 1
+
+
+def test_backward_drain_starts_from_an_explicit_before_cursor() -> None:
+    """An explicit `before` is the first page's cursor, not an ignored kwarg."""
+    msgs = _window_msgs(150)
+    cutoff = msgs[100].created_at
+    chan = _BackwardChannel("c1", "deep", msgs)
+
+    messages, complete, _ = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=cutoff, backward=True, max_messages=None
+        )
+    )
+
+    assert complete is True
+    assert len(messages) == 100  # msgs[0:100] — strictly older than the cursor
+    assert all(m.created_at < cutoff for m in messages)
+    assert _before_cursors(chan)[0] == cutoff
+
+
+def test_backward_drain_honours_an_after_floor_alongside_before() -> None:
+    """`after` still bounds the far end of a backward walk."""
+    msgs = _window_msgs(250)
+    floor = msgs[99].created_at
+    chan = _BackwardChannel("c1", "deep", msgs)
+
+    messages, complete, _ = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=floor, before=None, backward=True, max_messages=None
+        )
+    )
+
+    assert complete is True
+    assert len(messages) == 150  # msgs[100:250]
+    assert all(m.created_at > floor for m in messages)
+
+
+def test_backward_drain_limit_bounds_the_total_across_pages() -> None:
+    """`limit` is a total, not a per-page size, in the backward direction."""
+    chan = _BackwardChannel("c1", "deep", _window_msgs(500))
+    messages, complete, _ = asyncio.run(
+        _discord._collect_history(
+            chan, limit=150, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+    assert len(messages) == 150
+    assert complete is True
+    assert [c["limit"] for c in chan.history_calls] == [100, 50]
+
+
+# -- 2. the cap is preserved in the new direction ---------------------------
+
+
+def test_backward_drain_message_cap_marks_partial_not_silent_truncation() -> None:
+    """Overshoot-and-drop still distinguishes 'cap hit' from 'window read'."""
+    chan = _BackwardChannel("c1", "busy", _window_msgs(500))
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=150
+        )
+    )
+    assert len(messages) == 150
+    assert complete is False
+    assert "cap" in reason
+
+
+def test_backward_drain_cap_equal_to_the_window_reports_complete() -> None:
+    """Hitting the cap exactly means the window WAS fully read."""
+    chan = _BackwardChannel("c1", "busy", _window_msgs(150))
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=150
+        )
+    )
+    assert len(messages) == 150
+    assert complete is True
+    assert reason is None
+
+
+# -- 3. rate-limit resume in the backward direction --------------------------
+
+
+def test_resume_cursor_resumes_from_newest_forward_and_oldest_backward() -> None:
+    """The direction decides the edge: newest for after=, oldest for before=.
+
+    The resume cursor is the message itself (by id, a snowflake), not its
+    ``created_at`` — qodo #3998468655: a datetime cursor is exclusive of its
+    whole millisecond, so a sibling message sharing it would be skipped.
+    """
+    msgs = _window_msgs(5)
+    oldest, newest = msgs[0], msgs[-1]
+    assert _discord._resume_cursor(msgs, None) is newest
+    assert _discord._resume_cursor(msgs, None, backward=True) is oldest
+    # Nothing read yet: fall back to the caller's own cursor, in both directions.
+    fallback = datetime.now(timezone.utc)
+    assert _discord._resume_cursor([], fallback) == fallback
+    assert _discord._resume_cursor([], fallback, backward=True) == fallback
+
+
+class _BackwardRateLimitedOnceChannel(_BackwardChannel):
+    """Raises 429 on the *second* page — i.e. mid-drain, with work banked."""
+
+    def history(self, limit=None, after=None, before=None):
+        self.history_calls.append({"limit": limit, "after": after, "before": before})
+        if len(self.history_calls) == 2:
+
+            async def _boom():
+                raise _RateLimited()
+                yield  # pragma: no cover
+
+            return _boom()
+        page = self._page(limit, after, before)
+
+        async def _gen():
+            for m in page:
+                yield m
+
+        return _gen()
+
+
+def test_backward_drain_resumes_from_the_oldest_message_after_a_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-drain 429 resumes OLDER, not from the top — losing nothing."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+    msgs = _window_msgs(250)
+    chan = _BackwardRateLimitedOnceChannel("c1", "deep", msgs)
+
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+
+    assert slept == [0.25]
+    assert complete is True
+    assert reason is None
+    ids = [m.id for m in messages]
+    # Nothing lost and nothing duplicated across the retry boundary.
+    assert sorted(ids) == sorted(m.id for m in msgs)
+    assert len(set(ids)) == 250
+    cursors = _before_cursors(chan)
+    # call 0: page 1 (None). call 1: 429 at the oldest of page 1. call 2: the
+    # RESUMED page, from that same oldest — not None, which would re-read
+    # page 1, and not the newest, which would walk the wrong way entirely.
+    # The cursor is the message itself (by id), not its timestamp — see
+    # qodo #3998468655 — so both are the SAME message object as msgs[150].
+    assert cursors[0] is None
+    assert cursors[1] is msgs[150]
+    assert cursors[2] is msgs[150]
+    assert all(c is not None for c in cursors[1:])
+
+
+def test_backward_drain_reports_failed_when_the_rate_limit_never_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_discord, "_sleep", _fake_sleep)
+
+    class _AlwaysLimited(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+
+            async def _boom():
+                raise _RateLimited()
+                yield  # pragma: no cover
+
+            return _boom()
+
+    chan = _AlwaysLimited("c1", "deep", [])
+    coro = _discord._collect_history(
+        chan, limit=None, after=None, before=None, backward=True, max_messages=None
+    )
+    with pytest.raises(_RateLimited):
+        asyncio.run(coro)
+    assert len(chan.history_calls) == 4  # initial try + 3 retries
+
+
+def test_backward_drain_partial_when_a_non_rate_limit_error_hits_mid_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hard failure after page 1 reports partial with what was read."""
+
+    class _BoomOnPageTwo(_BackwardChannel):
+        def history(self, limit=None, after=None, before=None):
+            self.history_calls.append({"limit": limit, "after": after, "before": before})
+            if len(self.history_calls) == 2:
+
+                async def _boom():
+                    raise RuntimeError("connection reset")
+                    yield  # pragma: no cover
+
+                return _boom()
+            page = self._page(limit, after, before)
+
+            async def _gen():
+                for m in page:
+                    yield m
+
+            return _gen()
+
+    chan = _BoomOnPageTwo("c1", "deep", _window_msgs(250))
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+    assert len(messages) == 100
+    assert complete is False
+    assert "connection reset" in reason
+
+
+# -- 4. the anti-infinite-loop guard ----------------------------------------
+
+
+def test_backward_drain_refuses_to_spin_when_the_cursor_cannot_advance() -> None:
+    """A server that ignores `before` must be reported, never looped on."""
+
+    class _IgnoresBefore(_BackwardChannel):
+        def _page(self, limit, after, before):  # noqa: ARG002
+            newest_first = list(reversed(self._messages))
+            return newest_first[: self.page_cap]
+
+    chan = _IgnoresBefore("c1", "stuck", _window_msgs(250))
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(
+            chan, limit=None, after=None, before=None, backward=True, max_messages=None
+        )
+    )
+    assert complete is False
+    assert "cursor" in reason
+    assert len(chan.history_calls) == 2  # page 1, then the non-advancing page 2
+    assert len(messages) == 200
+
+
+# -- 5. the forward direction is untouched -----------------------------------
+
+
+def test_forward_drain_still_issues_one_unwindowed_call_with_no_before() -> None:
+    """`before` must not leak into the forward path's history() kwargs."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    chan = _WindowChannel("c1", "general", _window_msgs(250))
+
+    messages, complete, reason = asyncio.run(
+        _discord._collect_history(chan, limit=None, after=cutoff, max_messages=None)
+    )
+
+    assert len(messages) == 250
+    assert complete is True
+    assert reason is None
+    # _WindowChannel.history has no `before` parameter at all: passing one
+    # would TypeError. The forward call signature is byte-for-byte what it was.
+    assert chan.history_calls == [{"limit": None, "after": cutoff}]
+
+
+def test_history_omits_cursors_that_are_not_set() -> None:
+    """`_history` passes only the cursors it was given."""
+    recorded: list[dict] = []
+
+    class _Recorder:
+        def history(self, **kwargs):
+            recorded.append(kwargs)
+            return None
+
+    chan = _Recorder()
+    stamp = datetime.now(timezone.utc)
+    _discord._history(chan, limit=5, after=None)
+    _discord._history(chan, limit=None, after=stamp)
+    _discord._history(chan, limit=7, after=None, before=stamp)
+    _discord._history(chan, limit=None, after=stamp, before=stamp)
+    assert recorded == [
+        {"limit": 5},
+        {"limit": None, "after": stamp},
+        {"limit": 7, "before": stamp},
+        {"limit": None, "after": stamp, "before": stamp},
+    ]
