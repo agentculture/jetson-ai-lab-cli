@@ -15,24 +15,39 @@ deletable per author and per channel.
 
 **Document shape** (one per Discord message, ``_id`` = the message id):
 
-===============  ========================================================
-``channel_id``   the public channel the message was read from
-``author_id``    Discord's author id (never a username — names are
-                 resolved at render time, as in the members/links paths)
-``created_at``   Discord's creation timestamp
-``updated_at``   Discord's edit timestamp, ``None`` when never edited
-``stored_at``    when *jlab* wrote this copy
-``content``      the encrypted envelope (never a plaintext string)
-``jump_url``     durable pointer back to the original message
-===============  ========================================================
+=====================  ==================================================
+``channel_id``         the public channel the message was read from
+``author_id``          Discord's author id, cleartext (queried by
+                       purge/suppression; never a username)
+``author_name``        encrypted (deviation d4; ``None`` when Discord gave
+                       none, or on a document cached before d4)
+``author_display_name``  encrypted (deviation d4; same absence rule)
+``created_at``         Discord's creation timestamp
+``updated_at``         Discord's edit timestamp, ``None`` when never edited
+``stored_at``          when *jlab* wrote this copy
+``content``            the encrypted envelope (never a plaintext string)
+``jump_url``           durable pointer back to the original message
+=====================  ==================================================
 
 The three timestamps are the point of the schema: ``created_at`` orders the
 corpus, ``created_at`` vs ``updated_at`` makes an edit detectable, and
 ``stored_at`` means the age of the local copy is always known. A later task
 builds the reconciliation sweep on exactly these three.
 
+**Deviation d4 — author names are stored, encrypted.** Unlike the
+members/links paths (which resolve a name only at render time, from a live
+lookup, and never store one), this cache stores ``author_name`` and
+``author_display_name`` themselves — each its own ``{v,n,c}`` envelope via
+:mod:`jlab.crypto`, exactly like ``content``, never folded into it and never
+a cleartext field. That is a deliberate, narrower choice than the
+members/links no-name rule: a paged read or search needs to show *who* said
+something without an extra Discord round trip, and the id alone does not
+read as a name. ``author_id`` stays cleartext (queried by purge and
+suppression); every other id/timestamp field stays cleartext too — only
+``content`` and the two name fields are ever encrypted.
+
 Metadata is stored in the clear on purpose so the cache stays queryable by
-channel, author and time; only the body is encrypted.
+channel, author and time; the body and both name fields are encrypted.
 """
 
 from __future__ import annotations
@@ -79,11 +94,52 @@ def _author_id(message: dict) -> str | None:
     return str(value) if value is not None else None
 
 
+def _author_field(message: dict, field: str) -> str | None:
+    """*field* (``"name"`` or ``"display_name"``) off ``message["author"]``.
+
+    ``None`` when absent — never a fabricated placeholder, so nothing but a
+    genuine value from Discord is ever handed to :func:`jlab.crypto.encrypt`.
+    """
+    author = message.get("author") or {}
+    if not isinstance(author, dict):
+        return None
+    value = author.get(field)
+    return str(value) if value else None
+
+
+def _encrypt_optional(value: str | None) -> dict[str, object] | None:
+    """:func:`jlab.crypto.encrypt` *value*, or ``None`` straight through.
+
+    ``encrypt`` only accepts a string; a ``None`` author name/display name
+    (a bare bot account, or an author field Discord didn't send) must stay
+    ``None`` in storage — never an encrypted empty string standing in for
+    "absent", which would be indistinguishable from a genuinely empty name.
+    """
+    return _crypto.encrypt(value) if value is not None else None
+
+
+def _decrypt_optional(envelope: object) -> str | None:
+    """The inverse of :func:`_encrypt_optional`: ``None`` stays ``None``.
+
+    Also covers a document cached before deviation d4 (author names), whose
+    ``author_name``/``author_display_name`` fields are simply absent —
+    ``doc.get(...)`` already yields ``None`` for those, so an older document
+    still reads.
+    """
+    return _crypto.decrypt(envelope) if envelope is not None else None
+
+
 def _document(channel_id: str, message: dict, now: dt.datetime) -> dict[str, Any]:
     """Build the storable document for *message*, encrypting its body.
 
     Raises :class:`CliError` (code 2) — via :func:`jlab.crypto.encrypt` — when
     no key is configured, **before** anything is handed to pymongo.
+
+    **Deviation d4.** ``author_name``/``author_display_name`` are encrypted
+    the same way ``content`` is — their own ``{v,n,c}`` envelope apiece, never
+    folded into ``content``'s — so a name never appears in any cleartext,
+    queryable field. ``author_id`` (needed for purge/suppression queries) and
+    every timestamp stay cleartext, unchanged.
     """
     message_id = message.get("id")
     if message_id is None:
@@ -99,6 +155,8 @@ def _document(channel_id: str, message: dict, now: dt.datetime) -> dict[str, Any
         "channel_id": str(channel_id),
         "author_id": _author_id(message),
         "author_is_bot": bool((message.get("author") or {}).get("bot")),
+        "author_name": _encrypt_optional(_author_field(message, "name")),
+        "author_display_name": _encrypt_optional(_author_field(message, "display_name")),
         "created_at": _parse_timestamp(message.get("created_at")),
         "updated_at": _parse_timestamp(message.get("edited_at")),
         "stored_at": now,
@@ -251,6 +309,10 @@ def _decrypt_document(doc: dict) -> dict[str, Any]:
         "channel_id": doc.get("channel_id"),
         "author_id": doc.get("author_id"),
         "author_is_bot": doc.get("author_is_bot", False),
+        # d4: absent on a document cached before author names were stored —
+        # doc.get(...) already yields None there, so an older document reads.
+        "author_name": _decrypt_optional(doc.get("author_name")),
+        "author_display_name": _decrypt_optional(doc.get("author_display_name")),
         "created_at": doc.get("created_at"),
         "updated_at": doc.get("updated_at"),
         "stored_at": doc.get("stored_at"),

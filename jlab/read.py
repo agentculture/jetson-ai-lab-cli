@@ -24,24 +24,20 @@ path by which it touches Discord:
   the cache, same as the no-flag path, so the message shape is identical
   whichever path filled the cache.
 
-**Why the returned messages are not byte-identical to the old live shape.**
-:mod:`jlab.cache`'s documented schema deliberately never stores an author's
-display name (only ``author_id`` — see ``jlab/cache.py``'s module docstring:
-"never a username — names are resolved at render time, as in the
-members/links paths"). Resolving a name at render time (as members/links do)
-means one ``guild.fetch_member`` call per author, which is itself a Discord
-request — and issuing one on every cache-served ``read`` would silently
-reintroduce exactly the network dependency ``--refresh`` exists to make
-explicit. So cache-served ``read`` never resolves a name: ``author.name`` and
-``author.display_name`` are ``None`` (never a fabricated label — the same
-"empty means absent" convention :func:`jlab.cli._discord._serialize_channel_ref`
-already uses for an unknown channel), and text mode falls back to the raw
-author id for the printed line. This is the one place o21's "same text/JSON
-shape as the live read does today" is a shape promise, not a value promise:
-the envelope (``channel_id``/``messages``/``complete`` at the top, and
+**Author names (deviation d4).** :mod:`jlab.cache` stores ``author_name`` and
+``author_display_name`` encrypted beside the body (its own ``{v,n,c}``
+envelope apiece — never folded into ``content``'s, never a cleartext,
+queryable field), so a cache-served message carries the same name a live
+read would, decrypted here. ``author.name``/``author.display_name`` are
+``None`` only for a document cached before d4 — never a fabricated label,
+the same "empty means absent" convention
+:func:`jlab.cli._discord._serialize_channel_ref` already uses for an unknown
+channel — and text mode falls back to the raw author id only in that case.
+The envelope (``channel_id``/``messages``/``complete`` at the top, and
 ``id``/``author``/``content``/``created_at``/``edited_at``/``channel``/
-``jump_url``/``attachments``/``embeds``/``thread`` on each message) is
-unchanged; the values a cache can actually supply are what they are.
+``jump_url``/``attachments``/``embeds``/``thread`` on each message) matches
+a live read's shape; ``attachments``/``embeds``/``thread``/``channel.name``
+are still not retained by the cache, so those stay empty/absent.
 
 **Gap reporting.** "Covered" is decided the same way :mod:`jlab.coverage`
 decides it everywhere else: the window from the oldest message this call
@@ -76,13 +72,17 @@ def _to_message_shape(doc: dict[str, Any], channel_id: str) -> dict[str, Any]:
     """A cached document, in the same envelope shape :func:`jlab.cli._discord.
     _serialize_message` emits for a live read (see the module docstring for
     which values a cache-served read can and cannot supply).
+
+    ``author.name``/``author.display_name`` come from the cache's own
+    encrypted, decrypted-here fields (deviation d4); they are ``None`` only
+    for a document cached before that change — never fabricated.
     """
     return {
         "id": doc.get("message_id"),
         "author": {
             "id": doc.get("author_id"),
-            "name": None,
-            "display_name": None,
+            "name": doc.get("author_name"),
+            "display_name": doc.get("author_display_name"),
             "bot": bool(doc.get("author_is_bot")),
         },
         "content": doc.get("content"),

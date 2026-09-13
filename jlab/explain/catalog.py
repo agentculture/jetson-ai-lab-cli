@@ -192,9 +192,11 @@ Guild + public checks run before any history read (the same guards `discord
 fetch` uses); a private or another guild's channel is refused (exit 1)
 before any Discord read, leaking no name or content.
 
-Because the cache never stores a resolved author display name, a
-cache-served message's `author.name`/`author.display_name` are `None`
-rather than a guess; text mode falls back to the raw author id.
+The cache stores author name and display name encrypted alongside the body
+(deviation d4), so a cache-served message's `author.name`/`author.
+display_name` match a live read's; they are `None` only for a message
+cached before that change (never a guess), and text mode falls back to the
+raw author id only in that case.
 
 ## Usage
 
@@ -403,10 +405,10 @@ matched before the cutoff is still returned. `--max-matches N` stops the scan
 early and reports `truncated: true`, which is a distinct condition from
 `bounded`.
 
-Output per match: message id, `created_at`, the author id exactly as the
-cache stored it (the cache never stores a display name, so no name
-resolution — and none is attempted, since that would mean a live Discord
-call), `jump_url`, and `content`.
+Output per match: message id, `created_at`, `author_id`, `author_name` (the
+cache's own decrypted, stored name — deviation d4 — `None` only for a
+message cached before that; still no live Discord call, since the name
+comes from the cache, never a fresh lookup), `jump_url`, and `content`.
 
 ## Usage
 

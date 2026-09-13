@@ -120,7 +120,7 @@ def test_covered_window_serves_the_same_messages_from_the_cache(
     assert len(result["messages"]) == 6
     assert [m["content"] for m in result["messages"]] == [f"m{i}" for i in range(6)]
     for msg in result["messages"]:
-        assert msg["author"]["name"] is None  # never fabricated
+        assert msg["author"]["name"] == "ann"  # d4: the cache's own stored name
         assert msg["author"]["id"]
         assert set(msg) == {
             "id",
@@ -327,6 +327,49 @@ def test_refresh_applies_an_edit_inside_an_already_covered_window(
     assert "EDITED CONTENT" in [
         d["content"] for d in _cache.fetch_messages("60001", collection=col)
     ]
+
+
+def test_refresh_applies_a_renamed_authors_new_name(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """d4: a changed display name is a change to re-store, like an edited body."""
+    col = _FakeCollection()
+    msgs = _window_msgs(3)
+    now = dt.datetime.now(UTC)
+
+    _cache.store_messages(
+        "60005",
+        [
+            {
+                "id": m.id,
+                "author": {"id": f"{m.id}a", "name": "ann", "bot": False},
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in msgs
+        ],
+        collection=col,
+    )
+    assert _cache.fetch_messages("60005", collection=col)[1]["author_name"] == "ann"
+
+    msgs[1].author.name = "annette"
+    chan = _BackwardChannel("60005", "general", msgs, public=True)
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "60005",
+        limit=3,
+        refresh=True,
+        now=now,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is True
+    renamed = next(m for m in result["messages"] if m["id"] == msgs[1].id)
+    assert renamed["author"]["name"] == "annette"  # the rename was applied
+    others = [m for m in result["messages"] if m["id"] != msgs[1].id]
+    assert all(m["author"]["name"] == "ann" for m in others)  # unaffected
 
 
 def test_refresh_removes_a_message_deleted_on_discord(

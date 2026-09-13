@@ -5,9 +5,11 @@ already-covered span) and :mod:`jlab.read`'s ``--refresh`` (a single bounded
 live re-read of the window a ``read`` call will serve) need the exact same
 three decisions applied to a span once they have live-read it:
 
-* a message whose body or Discord edit timestamp changed, or one the cache
-  never had, is (re)written through :func:`jlab.cache.store_messages` — the
-  single enforcement point for purge suppression, never bypassed here;
+* a message whose body, Discord edit timestamp, author name or author
+  display name changed, or one the cache never had, is (re)written through
+  :func:`jlab.cache.store_messages` — the single enforcement point for purge
+  suppression, never bypassed here. The latest name wins, just as the latest
+  edit does (deviation d4: names are stored, encrypted, alongside the body);
 * a cached message Discord no longer returns is deleted — **only** when the
   span was read completely. A span cut short by a rate limit or an error
   deletes nothing: a partial re-read proves nothing about what is absent;
@@ -30,12 +32,24 @@ from jlab import coverage as _coverage
 
 
 def _changed(cached: dict[str, Any], live: dict[str, Any]) -> bool:
-    """Whether Discord's copy differs from the cached one (body or edit stamp)."""
+    """Whether Discord's copy differs from the cached one.
+
+    Compares body, Discord's edit timestamp, and (d4) author name/display
+    name — a live author dict nested under ``live["author"]`` against the
+    cache's own flat ``author_name``/``author_display_name`` fields (already
+    decrypted by :func:`jlab.cache.messages_between`). A renamed member is a
+    change to re-store, exactly like an edited body.
+    """
     if (cached.get("content") or "") != (live.get("content") or ""):
         return True
-    return _cache._parse_timestamp(cached.get("updated_at")) != _cache._parse_timestamp(
+    if _cache._parse_timestamp(cached.get("updated_at")) != _cache._parse_timestamp(
         live.get("edited_at")
-    )
+    ):
+        return True
+    live_author = live.get("author") or {}
+    if (cached.get("author_name") or None) != (live_author.get("name") or None):
+        return True
+    return (cached.get("author_display_name") or None) != (live_author.get("display_name") or None)
 
 
 def reconcile_span(

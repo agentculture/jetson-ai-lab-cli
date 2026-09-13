@@ -47,9 +47,8 @@ def _search_text(result: dict) -> str:
     if result["truncated"]:
         lines.append("truncated: --max-matches reached")
     for m in result["matches"]:
-        lines.append(
-            f"[{m['created_at']}] author {m['author_id']} ({m['jump_url']}): {m['content']}"
-        )
+        author = m.get("author_name") or m["author_id"]
+        lines.append(f"[{m['created_at']}] {author} ({m['jump_url']}): {m['content']}")
     return "\n".join(lines)
 
 
