@@ -283,8 +283,9 @@ tests assert `usage: jetson-ai-lab-cli` and `nick: jetson-ai-lab-cli`.
 
 ## Commands
 
-Python 3.12+, managed with **uv**. Runtime has **zero third-party dependencies**
-(`dependencies = []` in `pyproject.toml`); `teken`, pytest, linters are dev-only.
+Python 3.12+, managed with **uv**. Runtime dependencies are limited to the
+approved allowlist under *Conventions* (`pymongo`, `cryptography`, plus the optional
+`[discord]` extra); `teken`, pytest, linters are dev-only.
 
 ```bash
 uv sync                                          # create .venv, install dev deps
