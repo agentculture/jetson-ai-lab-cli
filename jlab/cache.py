@@ -326,18 +326,33 @@ def iter_messages(
     *,
     collection: Any = None,
     limit: int | None = None,
+    since: dt.datetime | None = None,
+    until: dt.datetime | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield cached messages, oldest first, with content decrypted.
 
     Decryption is not optional and not lazy: a missing or wrong key raises
     :class:`CliError` (code 2) rather than yielding an envelope or skipping the
-    document. A regex search (a later task) consumes this iterator and matches
-    the decrypted text client-side — the server never sees plaintext, so no
-    server-side query can filter on content.
+    document. A regex search consumes this iterator and matches the decrypted
+    text client-side — the server never sees plaintext, so no server-side
+    query can filter on content.
+
+    *since*/*until* (both optional, independently) filter server-side on the
+    cleartext ``created_at`` field — a message outside the window is never
+    fetched from the collection, and therefore never decrypted. Both bounds
+    are inclusive. Omitting both preserves the old, unfiltered behaviour for
+    existing callers.
     """
     query: dict[str, Any] = {}
     if channel_id is not None:
         query["channel_id"] = str(channel_id)
+    created_range: dict[str, Any] = {}
+    if since is not None:
+        created_range["$gte"] = since
+    if until is not None:
+        created_range["$lte"] = until
+    if created_range:
+        query["created_at"] = created_range
 
     def _run(col: Any) -> Iterator[dict[str, Any]]:
         cursor = col.find(query).sort("created_at", 1)

@@ -31,6 +31,7 @@ import json
 import pytest
 
 from jlab import coverage as _coverage
+from jlab import crypto as _crypto
 from jlab import fetch as _fetch_mod
 from jlab import mongo as _mongo
 from jlab import search as _search
@@ -44,13 +45,13 @@ _KEY_ENV = "JLAB_CACHE_KEY"
 _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(_KEY_ENV, _TEST_KEY)
     return _TEST_KEY
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_home(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path / "state"))
     _coverage.release_all_locks()
@@ -186,9 +187,40 @@ def test_negative_or_zero_timeout_is_rejected(
     monkeypatch: pytest.MonkeyPatch, key: str, lock_home
 ) -> None:
     chan, col = _fetch_into(monkeypatch, "50004", _window_msgs(2))
+    coverage_collection = _cov(col)
     with pytest.raises(CliError) as excinfo:
         _search.search_channel(
-            "50004", "x", timeout=0, collection=col, coverage_collection=_cov(col)
+            "50004", "x", timeout=0, collection=col, coverage_collection=coverage_collection
+        )
+    assert excinfo.value.code == EXIT_USER_ERROR
+
+
+def test_nan_timeout_is_rejected(monkeypatch: pytest.MonkeyPatch, key: str, lock_home) -> None:
+    """A NaN timeout must never reach ``Queue.get(timeout=...)`` (qodo 3998468649)."""
+    chan, col = _fetch_into(monkeypatch, "50005", _window_msgs(2))
+    coverage_collection = _cov(col)
+    with pytest.raises(CliError) as excinfo:
+        _search.search_channel(
+            "50005",
+            "x",
+            timeout=float("nan"),
+            collection=col,
+            coverage_collection=coverage_collection,
+        )
+    assert excinfo.value.code == EXIT_USER_ERROR
+
+
+def test_infinite_timeout_is_rejected(monkeypatch: pytest.MonkeyPatch, key: str, lock_home) -> None:
+    """A +inf timeout must never reach ``Queue.get(timeout=...)`` (qodo 3998468649)."""
+    chan, col = _fetch_into(monkeypatch, "50006", _window_msgs(2))
+    coverage_collection = _cov(col)
+    with pytest.raises(CliError) as excinfo:
+        _search.search_channel(
+            "50006",
+            "x",
+            timeout=float("inf"),
+            collection=col,
+            coverage_collection=coverage_collection,
         )
     assert excinfo.value.code == EXIT_USER_ERROR
 
@@ -252,28 +284,74 @@ def test_a_fully_covered_window_reports_complete(
     assert result["match_count"] == 1
 
 
+def test_out_of_window_messages_are_never_decrypted_or_returned(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """qodo 3998468661: the window is pushed into the Mongo query itself, so a
+    message outside it is never fetched from the collection and therefore
+    never decrypted — not merely excluded from the rendered result after the
+    fact.
+    """
+    now = dt.datetime.now(UTC)
+    msgs = [
+        _FakeMsg("old", "ann", "marker outside the window", now - dt.timedelta(days=60)),
+        _FakeMsg("new", "ann", "marker inside the window", now - dt.timedelta(minutes=5)),
+    ]
+    chan, col = _fetch_into(monkeypatch, "65001", msgs, now=now)
+
+    calls = {"count": 0}
+    real_decrypt = _crypto.decrypt
+
+    def _counting_decrypt(envelope):
+        calls["count"] += 1
+        return real_decrypt(envelope)
+
+    monkeypatch.setattr(_crypto, "decrypt", _counting_decrypt)
+
+    result = _search.search_channel(
+        "65001",
+        "marker",
+        since=now - dt.timedelta(days=1),
+        until=now + dt.timedelta(days=1),
+        collection=col,
+        coverage_collection=_cov(col),
+        now=now,
+    )
+
+    assert result["match_count"] == 1
+    assert result["matches"][0]["message_id"] == "new"
+    # Exactly the in-window document's three encrypted fields (content,
+    # author_name, author_display_name) are decrypted — the out-of-window
+    # document contributes zero, because it was never read from Mongo.
+    assert calls["count"] == 3
+
+
 def test_since_without_until_is_a_code_1_error(key: str, lock_home) -> None:
     col = _FakeCollection()
+    since = dt.datetime.now(UTC)
+    coverage_collection = _cov(col)
     with pytest.raises(CliError) as excinfo:
         _search.search_channel(
             "60004",
             "x",
-            since=dt.datetime.now(UTC),
+            since=since,
             collection=col,
-            coverage_collection=_cov(col),
+            coverage_collection=coverage_collection,
         )
     assert excinfo.value.code == EXIT_USER_ERROR
 
 
 def test_until_without_since_is_a_code_1_error(key: str, lock_home) -> None:
     col = _FakeCollection()
+    until = dt.datetime.now(UTC)
+    coverage_collection = _cov(col)
     with pytest.raises(CliError) as excinfo:
         _search.search_channel(
             "60005",
             "x",
-            until=dt.datetime.now(UTC),
+            until=until,
             collection=col,
-            coverage_collection=_cov(col),
+            coverage_collection=coverage_collection,
         )
     assert excinfo.value.code == EXIT_USER_ERROR
 
@@ -383,13 +461,17 @@ def test_max_matches_stops_early_and_reports_truncated(
     assert result["match_count"] == 3
     assert result["truncated"] is True
     assert result["bounded"] is False
+    # qodo 3998468663: "scanned" must reflect what the worker actually
+    # checked before stopping early, not the full corpus length (8).
+    assert result["scanned"] == 3
 
 
 def test_max_matches_rejects_non_positive(key: str, lock_home) -> None:
     col = _FakeCollection()
+    coverage_collection = _cov(col)
     with pytest.raises(CliError) as excinfo:
         _search.search_channel(
-            "80003", "x", max_matches=0, collection=col, coverage_collection=_cov(col)
+            "80003", "x", max_matches=0, collection=col, coverage_collection=coverage_collection
         )
     assert excinfo.value.code == EXIT_USER_ERROR
 
@@ -418,7 +500,7 @@ def test_no_matches_in_a_fully_covered_window_is_distinct_from_uncovered(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def cli_env(monkeypatch: pytest.MonkeyPatch, key: str, lock_home):
     now = dt.datetime.now(UTC)
     msgs = [_FakeMsg("m1", "ann", "September was busy", now - dt.timedelta(minutes=5))]

@@ -30,7 +30,7 @@ _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 _OTHER_KEY = base64.urlsafe_b64encode(b"j" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(_KEY_ENV, _TEST_KEY)
     return _TEST_KEY
@@ -39,6 +39,33 @@ def key(monkeypatch: pytest.MonkeyPatch) -> str:
 # ---------------------------------------------------------------------------
 # Fakes — an in-memory stand-in for a pymongo collection.
 # ---------------------------------------------------------------------------
+
+
+def _matches(doc: dict, flt: dict) -> bool:
+    """Mirror pymongo's filter matching, including the ops the cache layer
+    issues — enough for :func:`jlab.cache.iter_messages`'s created_at range.
+    """
+    for field, want in flt.items():
+        got = doc.get(field)
+        if isinstance(want, dict):
+            for op, operand in want.items():
+                if op == "$gte":
+                    if got is None or not got >= operand:
+                        return False
+                elif op == "$lte":
+                    if got is None or not got <= operand:
+                        return False
+                elif op == "$lt":
+                    if got is None or not got < operand:
+                        return False
+                elif op == "$gt":
+                    if got is None or not got > operand:
+                        return False
+                else:  # pragma: no cover - unsupported operator in a test fake
+                    raise AssertionError(f"fake collection got operator {op!r}")
+        elif got != want:
+            return False
+    return True
 
 
 class _FakeCursor:
@@ -103,7 +130,7 @@ class _FakeCollection:
     # -- reads
     def find(self, flt: dict | None = None) -> _FakeCursor:
         flt = flt or {}
-        out = [d for d in self.docs.values() if all(d.get(k) == v for k, v in flt.items())]
+        out = [d for d in self.docs.values() if _matches(d, flt)]
         return _FakeCursor([dict(d) for d in out])
 
     def find_one(self, flt: dict) -> dict | None:
@@ -258,8 +285,9 @@ def test_store_without_key_writes_nothing_and_raises(
     """The whole point of this task: no key means no write, never a plaintext write."""
     monkeypatch.delenv(_KEY_ENV, raising=False)
     col = _FakeCollection()
+    messages = [_message()]
     with pytest.raises(CliError) as exc:
-        _cache.store_messages("chan-1", [_message()], collection=col)
+        _cache.store_messages("chan-1", messages, collection=col)
     assert exc.value.code == 2
     assert col.docs == {}
 
@@ -497,6 +525,95 @@ def test_measure_encryption_without_key_is_an_env_error(
         _cache.measure_encryption(collection=col)
     assert exc.value.code == 2
     assert col.docs == {}
+
+
+# ---------------------------------------------------------------------------
+# iter_messages — since/until pushed into the server-side query (qodo 3998468661)
+# ---------------------------------------------------------------------------
+
+
+def test_iter_messages_since_until_filters_server_side(key: str) -> None:
+    """A message outside ``[since, until]`` is excluded by the query itself —
+    proven here at the Mongo-filter level, independent of any caller
+    (``jlab.search``) that also happens to re-check the window in Python.
+    """
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [
+            _message("old", content="too early", created="2026-01-01T00:00:00+00:00"),
+            _message("mid", content="in window", created="2026-06-01T00:00:00+00:00"),
+            _message("new", content="too late", created="2026-12-01T00:00:00+00:00"),
+        ],
+        collection=col,
+    )
+
+    since = dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc)
+    until = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    got = list(_cache.iter_messages("chan-1", collection=col, since=since, until=until))
+    assert [m["message_id"] for m in got] == ["mid"]
+
+
+def test_iter_messages_since_until_bounds_are_inclusive(key: str) -> None:
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [_message("edge", content="on the boundary", created="2026-06-01T00:00:00+00:00")],
+        collection=col,
+    )
+    edge = dt.datetime(2026, 6, 1, tzinfo=dt.timezone.utc)
+    got = list(_cache.iter_messages("chan-1", collection=col, since=edge, until=edge))
+    assert [m["message_id"] for m in got] == ["edge"]
+
+
+def test_iter_messages_without_since_until_is_unfiltered(key: str) -> None:
+    """Existing callers that pass neither bound keep seeing every message."""
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [
+            _message("a", created="2026-01-01T00:00:00+00:00"),
+            _message("b", created="2026-12-01T00:00:00+00:00"),
+        ],
+        collection=col,
+    )
+    got = list(_cache.iter_messages("chan-1", collection=col))
+    assert {m["message_id"] for m in got} == {"a", "b"}
+
+
+def test_iter_messages_never_decrypts_a_message_outside_the_window(
+    key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The query excludes the out-of-window document before the cursor is
+    ever iterated, so decryption is never attempted on it.
+    """
+    col = _FakeCollection()
+    _cache.store_messages(
+        "chan-1",
+        [
+            _message("old", content="excluded", created="2026-01-01T00:00:00+00:00"),
+            _message("new", content="included", created="2026-06-01T00:00:00+00:00"),
+        ],
+        collection=col,
+    )
+
+    decrypted_ids: list[str] = []
+    real_decrypt = _crypto.decrypt
+
+    def _tracking_decrypt(envelope):
+        text = real_decrypt(envelope)
+        decrypted_ids.append(text)
+        return text
+
+    monkeypatch.setattr(_cache._crypto, "decrypt", _tracking_decrypt)
+
+    since = dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc)
+    until = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    got = list(_cache.iter_messages("chan-1", collection=col, since=since, until=until))
+
+    assert [m["message_id"] for m in got] == ["new"]
+    assert "excluded" not in decrypted_ids
+    assert "included" in decrypted_ids
 
 
 # ---------------------------------------------------------------------------

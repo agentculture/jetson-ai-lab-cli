@@ -45,6 +45,7 @@ listed under ``uncovered``, never as a silent zero-match answer.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import multiprocessing as mp
 import queue as _queue_mod
 import re
@@ -67,6 +68,11 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 #: killed at the wall-clock bound, which never reaches ``_worker``'s return).
 REASON_EXHAUSTED = "exhausted"
 REASON_MAX_MATCHES = "max-matches"
+
+#: How often (in items checked) the worker reports its running scan count, so
+#: a timeout that fires mid-scan still leaves the parent with a real lower
+#: bound on how much was actually checked, not just what happened to match.
+_PROGRESS_INTERVAL = 200
 
 
 def compile_pattern(pattern: str) -> "re.Pattern[str]":
@@ -129,24 +135,30 @@ def _worker(
 ) -> None:
     """Run in the child process (see the module docstring's o13 section).
 
-    Streams every match back immediately, then a final ``("done", reason)`` —
-    the parent only ever sees ``bounded=True`` when this sentinel never
-    arrives before the deadline.
+    Streams every match back immediately, a ``("progress", scanned)`` update
+    every :data:`_PROGRESS_INTERVAL` items so a timeout mid-scan still leaves
+    the parent with a real lower bound on how much was checked, and finally
+    ``("done", (reason, scanned))`` — the parent only ever sees
+    ``bounded=True`` when this sentinel never arrives before the deadline.
     """
     try:
         compiled = re.compile(pattern)
     except re.error:  # pragma: no cover - already validated in the parent
-        q.put(("error", "invalid pattern"))
+        q.put(("error", ("invalid pattern", 0)))
         return
     found = 0
+    scanned = 0
     for message_id, content in items:
+        scanned += 1
         if compiled.search(content or ""):
             q.put(("match", message_id))
             found += 1
             if max_matches is not None and found >= max_matches:
-                q.put(("done", REASON_MAX_MATCHES))
+                q.put(("done", (REASON_MAX_MATCHES, scanned)))
                 return
-    q.put(("done", REASON_EXHAUSTED))
+        if scanned % _PROGRESS_INTERVAL == 0:
+            q.put(("progress", scanned))
+    q.put(("done", (REASON_EXHAUSTED, scanned)))
 
 
 def _bounded_search(
@@ -155,17 +167,20 @@ def _bounded_search(
     *,
     timeout: float,
     max_matches: int | None,
-) -> tuple[list[str], bool, str | None]:
+) -> tuple[list[str], bool, str | None, int]:
     """Match *pattern* over *items* in a child process, bounded by *timeout*.
 
-    Returns ``(matched_ids, bounded, reason)`` in discovery order (which is
-    also ``created_at`` order, since *items* is). ``bounded`` is True exactly
-    when the wall-clock deadline fired before the worker finished — whatever
-    had already streamed back is still returned (o13: never an empty result
-    read as "no matches").
+    Returns ``(matched_ids, bounded, reason, scanned)`` in discovery order
+    (which is also ``created_at`` order, since *items* is). ``bounded`` is
+    True exactly when the wall-clock deadline fired before the worker
+    finished — whatever had already streamed back is still returned (o13:
+    never an empty result read as "no matches"). ``scanned`` is how many
+    items the worker actually checked — a real lower bound even when the scan
+    stopped early (``max_matches`` or a timeout), never the full length of
+    *items*.
     """
     if not items:
-        return [], False, REASON_EXHAUSTED
+        return [], False, REASON_EXHAUSTED, 0
 
     ctx = mp.get_context("fork")
     q: Any = ctx.Queue()
@@ -175,6 +190,7 @@ def _bounded_search(
     matched: list[str] = []
     bounded = True
     reason: str | None = None
+    scanned = 0
     try:
         while True:
             remaining = deadline - time.monotonic()
@@ -186,12 +202,13 @@ def _bounded_search(
                 break
             if kind == "match":
                 matched.append(payload)
-            elif kind == "done":
-                reason = payload
-                bounded = False
-                break
-            elif kind == "error":  # pragma: no cover - defence in depth
-                reason = payload
+            elif kind == "progress":
+                scanned = payload
+            elif kind in ("done", "error"):
+                # "error" is defence in depth: the worker only emits it for an
+                # invalid pattern, which the parent already rejected before
+                # ever spawning the worker (see compile_pattern).
+                reason, scanned = payload
                 bounded = False
                 break
     finally:
@@ -202,7 +219,7 @@ def _bounded_search(
         else:
             proc.join(0)
         q.close()
-    return matched, bounded, reason
+    return matched, bounded, reason, scanned
 
 
 def _render_match(message: dict[str, Any]) -> dict[str, Any]:
@@ -257,7 +274,7 @@ def search_channel(
             message=f"--max-matches must be >= 1, got {max_matches}",
             remediation="pass a positive integer, or omit it for no limit",
         )
-    if timeout is None or timeout <= 0:
+    if timeout is None or not math.isfinite(timeout) or timeout <= 0:
         raise CliError(
             code=EXIT_USER_ERROR,
             message=f"--timeout must be > 0, got {timeout!r}",
@@ -268,7 +285,14 @@ def search_channel(
     channel = str(channel_id)
     coverage_info = _coverage.describe(channel, window, collection=coverage_collection)
 
-    messages = list(_cache.iter_messages(channel, collection=collection))
+    # The window is pushed into the Mongo query itself (server-side, on the
+    # cleartext created_at) so an out-of-window message is never fetched from
+    # the collection and therefore never decrypted. The in-Python re-check
+    # below is defence in depth only — cheap, since it runs over the (already
+    # windowed) result set, not the whole channel.
+    messages = list(
+        _cache.iter_messages(channel, collection=collection, since=window.start, until=window.end)
+    )
     by_id = {m["message_id"]: m for m in messages}
     in_window = [
         m
@@ -278,7 +302,7 @@ def search_channel(
     ]
     items = [(m["message_id"], m.get("content") or "") for m in in_window]
 
-    matched_ids, bounded, reason = _bounded_search(
+    matched_ids, bounded, reason, scanned = _bounded_search(
         pattern, items, timeout=timeout, max_matches=max_matches
     )
     matches = [by_id[mid] for mid in matched_ids if mid in by_id]
@@ -289,7 +313,7 @@ def search_channel(
         "window": window.to_dict(),
         "matches": [_render_match(m) for m in matches],
         "match_count": len(matches),
-        "scanned": len(items),
+        "scanned": scanned,
         "complete": coverage_info["complete"],
         "uncovered": coverage_info["uncovered"],
         "bounded": bounded,
