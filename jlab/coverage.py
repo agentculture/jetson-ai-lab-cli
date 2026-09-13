@@ -148,6 +148,31 @@ def merge(intervals: Iterable[Interval]) -> list[Interval]:
     return merged
 
 
+def _floor_ms(value: dt.datetime) -> dt.datetime:
+    return value.replace(microsecond=value.microsecond // 1000 * 1000)
+
+
+def _ceil_ms(value: dt.datetime) -> dt.datetime:
+    floored = _floor_ms(value)
+    return floored if floored == value else floored + dt.timedelta(milliseconds=1)
+
+
+def at_storage_precision(interval: Interval) -> Interval | None:
+    """*interval* shrunk inward to whole milliseconds, or ``None`` if nothing is left.
+
+    jlab-mongodb stores BSON datetimes to the millisecond, so a bound kept at
+    microsecond precision reads back truncated. Rounding the start up and the
+    end down before storing, and before comparing a query window against what
+    is stored, keeps both sides at the precision the database actually holds:
+    stored coverage is never wider than what was fetched, and a window that
+    ends at a microsecond "now" is not reported as missing a sub-millisecond
+    tail. Discord timestamps are themselves milliseconds, so no message can
+    fall inside the shaved sliver.
+    """
+    start, end = _ceil_ms(interval.start), _floor_ms(interval.end)
+    return Interval(start, end) if start <= end else None
+
+
 def subtract(window: Interval, covered: Sequence[Interval]) -> list[Interval]:
     """Return the parts of *window* that no interval in *covered* reaches.
 
@@ -365,9 +390,14 @@ def widen_coverage(
     channel = _validate_channel_id(channel_id)
     stamp = now or dt.datetime.now(UTC)
 
+    stored_span = at_storage_precision(span)
+
     def action(col: Any) -> list[Interval]:
         with channel_lock(channel):
-            merged = merge([*_read(col, channel), span])
+            existing = _read(col, channel)
+            if stored_span is None:
+                return existing
+            merged = merge([*existing, stored_span])
             col.update_one(
                 {"_id": channel},
                 {
@@ -406,7 +436,8 @@ def describe(
             "uncovered": [],
             "complete": bool(covered),
         }
-    gaps = subtract(window, covered)
+    compared = at_storage_precision(window)
+    gaps = subtract(compared, covered) if compared is not None else []
     return {
         "channel_id": str(channel_id),
         "window": window.to_dict(),
@@ -560,15 +591,17 @@ def fetch_missing(
     """
     channel = _validate_channel_id(channel_id)
     writer = store if store is not None else _default_store(channel)
-    started = now or dt.datetime.now(UTC)
+    started = _floor_ms(now or dt.datetime.now(UTC))
+    compared = at_storage_precision(window)
+
+    def missing(covered: Sequence[Interval]) -> list[Interval]:
+        return subtract(compared, covered) if compared is not None else []
 
     def action(col: Any) -> dict[str, Any]:
         with channel_lock(channel, blocking=blocking):
             before = _read(col, channel)
             gaps = [
-                Interval(g.start, min(g.end, started))
-                for g in subtract(window, before)
-                if g.start < started
+                Interval(g.start, min(g.end, started)) for g in missing(before) if g.start < started
             ]
             already = intersect(window, before)
             stored = 0
@@ -591,8 +624,8 @@ def fetch_missing(
                 "fetch_calls": len(gaps),
                 "stored": stored,
                 "coverage": [i.to_dict() for i in after],
-                "uncovered": [g.to_dict() for g in subtract(window, after)],
-                "complete": not subtract(window, after),
+                "uncovered": [g.to_dict() for g in missing(after)],
+                "complete": not missing(after),
             }
 
     return _run_with(collection, action)

@@ -859,3 +859,78 @@ def test_trim_before_takes_the_channel_lock(
 def test_trim_before_rejects_a_naive_cutoff(col: _FakeCollection, lock_home) -> None:
     with pytest.raises(CliError):
         _coverage.trim_before("chan-1", dt.datetime(2025, 1, 1), collection=col)
+
+
+# ---------------------------------------------------------------------------
+# BSON precision — a real jlab-mongodb stores datetimes to the millisecond
+# (lapse l4: the plain fake kept microseconds, so this never showed)
+# ---------------------------------------------------------------------------
+
+
+class _BsonPrecisionCollection(_FakeCollection):
+    """Truncates every stored datetime to whole milliseconds, as BSON does."""
+
+    @staticmethod
+    def _truncate(value):
+        if isinstance(value, dt.datetime):
+            return value.replace(microsecond=value.microsecond // 1000 * 1000)
+        if isinstance(value, list):
+            return [_BsonPrecisionCollection._truncate(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _BsonPrecisionCollection._truncate(v) for k, v in value.items()}
+        return value
+
+    def update_one(self, flt: dict, update: dict, upsert: bool = False) -> None:
+        super().update_one(flt, self._truncate(update), upsert=upsert)
+
+
+_MICRO_NOW = dt.datetime(2026, 9, 13, 4, 45, 12, 123456, tzinfo=UTC)
+
+
+def test_a_window_widened_at_a_microsecond_now_reads_back_complete_under_bson_precision(
+    lock_home,
+) -> None:
+    col = _BsonPrecisionCollection()
+    window = _iv(_at(2026, 9, 1), _MICRO_NOW)
+    _coverage.widen_coverage("chan-ms", window, collection=col)
+    described = _coverage.describe("chan-ms", window, collection=col)
+    assert described["uncovered"] == []
+    assert described["complete"] is True
+
+
+def test_a_repeat_fetch_at_a_microsecond_now_issues_no_fetch_under_bson_precision(
+    lock_home,
+) -> None:
+    col = _BsonPrecisionCollection()
+    window = _iv(_at(2026, 9, 1), _MICRO_NOW)
+    first = _coverage.fetch_missing(
+        "chan-ms2",
+        window,
+        fetch=lambda span: ([], True, None),
+        store=_noop,
+        collection=col,
+        now=_MICRO_NOW,
+    )
+    assert first["complete"] is True
+    assert first["uncovered"] == []
+    calls: list = []
+    second = _coverage.fetch_missing(
+        "chan-ms2",
+        window,
+        fetch=lambda span: (calls.append(span), ([], True, None))[1],
+        store=_noop,
+        collection=col,
+        now=_MICRO_NOW,
+    )
+    assert second["fetch_calls"] == 0
+    assert calls == []
+
+
+def test_stored_coverage_is_never_wider_than_the_span_at_millisecond_precision(lock_home) -> None:
+    col = _BsonPrecisionCollection()
+    start = dt.datetime(2026, 9, 1, 0, 0, 0, 999999, tzinfo=UTC)
+    end = dt.datetime(2026, 9, 2, 0, 0, 0, 500, tzinfo=UTC)
+    _coverage.widen_coverage("chan-ms3", _iv(start, end), collection=col)
+    [stored] = _coverage.read_coverage("chan-ms3", collection=col)
+    assert stored.start >= start
+    assert stored.end <= end
