@@ -40,13 +40,13 @@ UTC = dt.timezone.utc
 _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("JLAB_" + "CACHE_KEY", _TEST_KEY)
     return _TEST_KEY
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_home(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path / "state"))
     _coverage.release_all_locks()
@@ -54,7 +54,7 @@ def lock_home(tmp_path, monkeypatch: pytest.MonkeyPatch):
     _coverage.release_all_locks()
 
 
-@pytest.fixture()
+@pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     slept: list[float] = []
 
@@ -231,7 +231,8 @@ def test_full_cycle_applies_an_edit_removes_a_deletion_and_purges_a_private_chan
 
     row_a, row_b = _row(result, "51001"), _row(result, "51002")
     assert (row_a["updated"], row_a["deleted"], row_a["purged"]) == (1, 1, False)
-    assert row_b["purged"] is True and row_b["purge_reason"] == "not_public"
+    assert row_b["purged"] is True
+    assert row_b["purge_reason"] == "not_public"
     assert row_b["deleted"] == 5
     assert result["complete"] is True
     # A purged channel is reported by id only — never by name.
@@ -318,7 +319,8 @@ def test_a_vanished_forbidden_or_moved_channel_is_purged(
 
     result = _run_sweep(col, tmp_path)
     row = _row(result, "51003")
-    assert row["purged"] is True and row["purge_reason"] == reason
+    assert row["purged"] is True
+    assert row["purge_reason"] == reason
     assert _cached(col, "51003") == {}
     assert _coverage.read_coverage("51003", collection=_cov(col)) == []
     assert "moving-room" not in json.dumps(result, default=str)
@@ -422,7 +424,8 @@ def test_o20_a_rate_limit_delays_the_sweep_rather_than_narrowing_it(
 
     assert no_sleep == [0.25]  # it waited out the server's retry_after
     row = _row(result, "51020")
-    assert row["complete"] is True and row["incomplete"] == []
+    assert row["complete"] is True
+    assert row["incomplete"] == []
     assert row["deleted"] == 1
     assert gone.id not in _cached(col, "51020")
     assert result["complete"] is True
@@ -457,7 +460,8 @@ def test_o20_an_incomplete_span_reports_itself_and_deletes_nothing(
     assert result["complete"] is False
     assert result["incomplete_channels"] == ["51021"]
     cached = _cached(col, "51021")
-    assert old_gone.id in cached and new_gone.id in cached
+    assert old_gone.id in cached
+    assert new_gone.id in cached
     # Edits are safe to apply from a partial read; only deletion is gated.
     assert cached["i0140"]["content"] == "edited in the part that WAS read"
     # Coverage is never narrowed by an incomplete sweep.
@@ -477,7 +481,8 @@ def test_a_span_whose_read_fails_outright_deletes_nothing(
 
     result = _run_sweep(col, tmp_path)
     row = _row(result, "51022")
-    assert row["complete"] is False and row["incomplete"]
+    assert row["complete"] is False
+    assert row["incomplete"]
     assert len(_cached(col, "51022")) == 20
 
 
@@ -511,11 +516,18 @@ def test_a_cached_message_outside_every_covered_span_is_never_deleted(
     assert "stray1" in _cached(col, "51023")
 
 
-def test_a_cached_message_sharing_a_live_timestamp_is_kept(
+def test_a_deleted_message_sharing_a_live_timestamp_is_still_deleted(
     monkeypatch: pytest.MonkeyPatch, key: str, lock_home, tmp_path
 ) -> None:
-    """A backward cursor is a timestamp: a same-millisecond sibling of a page
-    boundary may be skipped by the re-read, so its absence proves nothing."""
+    """qodo 3998468657: deletion is decided by message id, not by whether some
+    *other* live message happens to share the doomed one's ``created_at``.
+
+    Two distinct messages sharing a millisecond timestamp is unremarkable in
+    a busy channel; a blanket "some live message has this timestamp" veto
+    would let a genuinely deleted message hide behind an unrelated survivor
+    forever. ``twin`` is a different message from ``msgs[1]`` that merely
+    shares its ``created_at``, and is genuinely gone from Discord by the time
+    the sweep re-reads the span — it must be removed."""
     msgs = _msgs("s", 4)
     chan = _BackwardChannel("51024", "general", msgs)
     _install(monkeypatch, {"51024": chan})
@@ -526,8 +538,8 @@ def test_a_cached_message_sharing_a_live_timestamp_is_kept(
     msgs.remove(twin)
 
     result = _run_sweep(col, tmp_path)
-    assert "s9999" in _cached(col, "51024")
-    assert _row(result, "51024")["deleted"] == 0
+    assert "s9999" not in _cached(col, "51024")
+    assert _row(result, "51024")["deleted"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +683,8 @@ def test_a_sweep_with_nothing_covered_opens_no_discord_session(
 ) -> None:
     monkeypatch.setattr(_discord, "_seam", lambda: _RaisingSeam())
     result = _run_sweep(_FakeCollection(), tmp_path)
-    assert result["channels"] == [] and result["complete"] is True
+    assert result["channels"] == []
+    assert result["complete"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +764,9 @@ def test_cli_sweep_without_a_cache_key_exits_2_before_any_discord_request(
     monkeypatch.setattr(_mongo, "message_collection", lambda *a, **k: _ctx(_FakeCollection()))
     assert main(["discord", "sweep"]) == 2
     err = capsys.readouterr().err
-    assert "CACHE_KEY" in err and "hint:" in err and "Traceback" not in err
+    assert "CACHE_KEY" in err
+    assert "hint:" in err
+    assert "Traceback" not in err
 
 
 def test_cli_sweep_without_a_mongo_uri_exits_2_before_any_discord_request(
@@ -764,7 +779,7 @@ def test_cli_sweep_without_a_mongo_uri_exits_2_before_any_discord_request(
     assert "JLAB_MONGO_URI" in err
 
 
-@pytest.fixture()
+@pytest.fixture
 def cli_col(monkeypatch: pytest.MonkeyPatch, key: str, lock_home, tmp_path):
     from jlab import purge as _purge
 
@@ -795,7 +810,8 @@ def test_cli_sweep_json_reports_per_channel_counts(
         for field in ("updated", "deleted", "purged", "complete", "incomplete"):
             assert field in row
     assert (rows["51050"]["updated"], rows["51050"]["deleted"]) == (1, 1)
-    assert rows["51050"]["purged"] is False and rows["51050"]["incomplete"] == []
+    assert rows["51050"]["purged"] is False
+    assert rows["51050"]["incomplete"] == []
     assert rows["51051"]["purged"] is True
     assert "hidden-name" not in captured.out + captured.err
 
@@ -804,7 +820,9 @@ def test_cli_sweep_text_mode(cli_col, capsys: pytest.CaptureFixture[str]) -> Non
     assert main(["discord", "sweep"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("complete:")
-    assert "51050" in out and "51051" in out and "purged" in out
+    assert "51050" in out
+    assert "51051" in out
+    assert "purged" in out
     assert "hidden-name" not in out
 
 

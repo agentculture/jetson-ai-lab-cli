@@ -111,11 +111,28 @@ def reconcile_span(
             "suppressed": suppressed_count,
         }
 
-    live_stamps = {_cache._parse_timestamp(m.get("created_at")) for m in live.values()}
+    # Deletion is decided by id, not by timestamp: two distinct messages can
+    # legitimately share a millisecond-precision created_at (busy channels
+    # routinely do), and a blanket "some live message has this timestamp"
+    # veto would let a genuinely deleted message hide behind any surviving
+    # one that happens to share its clock tick — never removed, forever.
+    #
+    # The one timestamp collision that is NOT ambiguous evidence is a cached
+    # message sitting exactly on this span's own exclusive edge
+    # (span.start/span.end): those are the values the live read's after=/
+    # before= cursors were built from, and Discord's own exclusive semantics
+    # mean a message stamped exactly there could never have come back in
+    # *this* read regardless of whether it still exists. In practice
+    # :func:`jlab.cache.messages_between` already excludes such a message
+    # from *cached* (its query is strictly-between), so this check is a
+    # documented no-op safety net, not a live guard — kept so the exclusion
+    # is explicit here rather than an invisible property of a query two
+    # modules away.
+    edge_stamps = {span.start, span.end}
     doomed = sorted(
         mid
         for mid, m in cached.items()
-        if mid not in live and _cache._parse_timestamp(m.get("created_at")) not in live_stamps
+        if mid not in live and _cache._parse_timestamp(m.get("created_at")) not in edge_stamps
     )
     removed = _cache.delete_message_ids(channel_id, doomed, collection=collection)
 
