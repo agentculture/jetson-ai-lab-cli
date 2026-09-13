@@ -108,10 +108,13 @@ through BSON encoding at all.
 uv run --extra discord jlab discord read 1327720920206282864 --refresh --limit 100 --json
 ```
 
-Result: 100 messages returned, `complete: false` (a routine race-window
-diagnostic — the live re-read's own clock advanced by microseconds between
-its start and the moment coverage was checked; harmless and expected on
-every real run). Oldest message: `2026-08-31T20:03:02.347000+00:00`. Newest:
+Result: 100 messages returned, `complete: false`. At the time this was
+taken for a harmless clock race; it was a real defect — jlab-mongodb stores
+datetimes to the millisecond, so a coverage end written at a microsecond
+"now" read back truncated and left a sub-millisecond "uncovered" tail on
+every live `fetch` and `read --refresh`. Fixed afterwards (see *Follow-up
+fix* below); re-run at the fix, the same `read --refresh` reports
+`complete: true`. Oldest message: `2026-08-31T20:03:02.347000+00:00`. Newest:
 `2026-09-12T14:13:47.055000+00:00`.
 
 ### 2. Search an uncovered window — reported as uncovered, not "no matches"
@@ -149,11 +152,11 @@ uv run --extra discord jlab discord fetch 1327720920206282864 --until 2026-08-25
 
 Result: `stored: 21`, `suppressed: 0`, two spans fetched
 (`2026-08-25T00:00:00+00:00 .. 2026-08-31T20:03:02.347000+00:00` — the gap
-the search above needed — plus a tiny microsecond span at the tail from the
-live clock advancing between calls), one span already covered
+the search above needed — plus a sub-millisecond span at the tail — the same
+millisecond-precision defect as step 1), one span already covered
 (`2026-08-31T20:03:02.347000+00:00 .. <fetch's own "now">`, i.e. everything
 step 1 already cached). `complete: false` only because of that same
-microsecond tail gap; the `2026-08-25 .. 2026-08-26` window this case cares
+sub-millisecond tail; the `2026-08-25 .. 2026-08-26` window this case cares
 about is now fully covered.
 
 ### 4. Re-run the same search — now covered, with real matches
@@ -197,6 +200,18 @@ lists it among covered channels.
 this case was purged the same way** (`purge --channel <id> --yes` for each),
 so this run's exploration left no cached content behind either — verified
 with a final `jlab discord coverage --json`, which returned `{"channels": []}`.
+
+## Follow-up fix: coverage at storage precision
+
+The `complete: false` in steps 1 and 3 was the third live-only defect this
+run surfaced (devague lapse l4). `jlab.coverage` now shrinks every stored
+span inward to whole milliseconds (start rounded up, end down, so coverage
+is never wider than what was fetched) and compares query windows at the
+same precision. Re-checked live against the same channel at that commit:
+`read --refresh --limit 20` → `complete: true`, no uncovered spans; a
+repeat `fetch` → `complete: true`, `uncovered: []`; then
+`purge --channel --yes` deleted the 20 cached messages, leaving the cache
+empty.
 
 ## Summary table
 
