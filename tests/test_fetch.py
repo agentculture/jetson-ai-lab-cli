@@ -45,6 +45,7 @@ from tests.test_discord import (
     _FakeGuild,
     _FakeMsg,
     _FakeSeam,
+    _RealisticChannel,
     _window_msgs,
 )
 
@@ -123,7 +124,58 @@ def test_fetch_reuses_channel_public_as_the_single_source_of_truth(
 
     monkeypatch.setattr(_discord, "_channel_public", spy)
     _fetch_mod.fetch_channel("42002", coverage_collection=_cov(col), message_collection=col)
-    assert calls and calls[0][0] is chan
+    # validated_channel passes a shallow `copy.copy(channel)` carrying the
+    # fully-fetched guild (see its WORKAROUND(discord-bot-cli#20)
+    # comment) rather than `chan` itself, so identity is not preserved —
+    # but it must be a copy of the SAME channel, not a different one.
+    assert calls and calls[0][0] is not chan and calls[0][0].id == chan.id
+
+
+# ---------------------------------------------------------------------------
+# discord-bot-cli#20 — the roleless "unavailable" guild stub (see
+# tests/test_discord.py's ``_RealisticChannel``/``_UnavailableGuildStub``
+# docstrings for the real discord.py shape this models). Live against the
+# Jetson AI Lab guild: EVERY channel failed the public check before this fix.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_of_a_public_channel_succeeds_despite_the_stub_guild(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """``fetch`` must resolve the public check against the guild
+    ``fetch_guild()`` returned, not the roleless stub ``fetch_channel()``
+    attaches — or every real public channel would be refused as private.
+    """
+    chan = _RealisticChannel("42099", "general", _window_msgs(2))
+    _seam(monkeypatch, chan)
+    col = _FakeCollection()
+
+    result = _fetch_mod.fetch_channel(
+        "42099", coverage_collection=_cov(col), message_collection=col
+    )
+
+    assert result["complete"] is True
+    assert chan.history_calls  # the public check passed, so history() was reached
+    assert len(_cache.fetch_messages("42099", collection=col)) == 2
+
+
+def test_fetch_refuses_a_channel_from_another_guild_even_via_the_realistic_stub(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """The stub's id is correct even though its roles are not — a channel
+    whose stub guild id names a DIFFERENT guild is still refused, never
+    let through just because the permission check now resolves elsewhere.
+    """
+    chan = _RealisticChannel("42098", "elsewhere", _window_msgs(2), guild_id=999)
+    _seam(monkeypatch, chan)
+    col = _FakeCollection()
+
+    with pytest.raises(CliError) as info:
+        _fetch_mod.fetch_channel("42098", coverage_collection=_cov(col), message_collection=col)
+
+    assert info.value.code == EXIT_USER_ERROR
+    assert chan.history_calls == []
+    assert list(col.find({})) == []
 
 
 def test_cli_fetch_of_a_private_channel_exits_1(

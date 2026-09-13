@@ -58,6 +58,7 @@ are held in memory while it is compared.
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -127,7 +128,12 @@ class _Sweeper:
     # -- one channel ----------------------------------------------------------
 
     def channel(
-        self, channel_id: str, client: Any, everyone: Any, on_loop: Callable[[Any], Any]
+        self,
+        channel_id: str,
+        client: Any,
+        guild: Any,
+        everyone: Any,
+        on_loop: Callable[[Any], Any],
     ) -> dict[str, Any]:
         row = _new_row(channel_id)
         if not channel_id.isdigit():
@@ -135,7 +141,7 @@ class _Sweeper:
             row["error"] = "coverage record does not name a Discord channel id; not swept"
             return row
         with _coverage.channel_lock(channel_id, blocking=self.blocking):
-            reason, channel = self._verify(channel_id, client, everyone, on_loop, row)
+            reason, channel = self._verify(channel_id, client, guild, everyone, on_loop, row)
             if row["error"] is not None:
                 return row
             if reason is not None:
@@ -148,6 +154,7 @@ class _Sweeper:
         self,
         channel_id: str,
         client: Any,
+        guild: Any,
         everyone: Any,
         on_loop: Callable[[Any], Any],
         row: dict[str, Any],
@@ -160,10 +167,24 @@ class _Sweeper:
                 row["complete"] = False
                 row["error"] = f"could not re-verify visibility; nothing purged: {exc}"
             return reason, None
+        # See jlab.fetch.validated_channel's WORKAROUND(discord-bot-cli#20)
+        # comment: the raw fetch_channel() result's own
+        # ``.guild`` (checked here, for the owner test) is an unavailable,
+        # roleless stub under this gateway-less client, so it is read ONLY
+        # for its id — never used for the permission check below.
         owner = getattr(getattr(channel, "guild", None), "id", None)
         if owner is None or int(owner) != int(self.gid):
             return "other_guild", None
-        if _discord._channel_public(channel, everyone) is not True:
+        # Resolve permissions against a shallow copy carrying the
+        # fully-fetched (role-populated) guild now that the owner check
+        # above has confirmed *channel* really belongs to it — never by
+        # mutating *channel* itself, which is reused below (and, in tests,
+        # across calls). Without this, permissions_for would resolve
+        # against the stub's empty roles (which would misreport every
+        # public channel as private and cause this sweep to purge it).
+        permission_probe = copy.copy(channel)
+        permission_probe.guild = guild
+        if _discord._channel_public(permission_probe, everyone) is not True:
             return "not_public", None
         return None, channel
 
@@ -296,7 +317,7 @@ def _sweep(
             return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
         def body() -> list[dict[str, Any]]:
-            return [sweeper.channel(c, client, everyone, on_loop) for c in channels]
+            return [sweeper.channel(c, client, guild, everyone, on_loop) for c in channels]
 
         return await loop.run_in_executor(None, body)
 

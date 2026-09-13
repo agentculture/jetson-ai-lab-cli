@@ -27,7 +27,13 @@ from jlab import fetch as _fetch_mod
 from jlab import mongo as _mongo
 from jlab import sweep as _sweep
 from jlab.cli import _discord, main
-from tests.test_discord import _BackwardChannel, _FakeGuild, _FakeMsg, _RateLimited
+from tests.test_discord import (
+    _BackwardChannel,
+    _FakeGuild,
+    _FakeMsg,
+    _RateLimited,
+    _RealisticChannel,
+)
 from tests.test_purge import _FakeCollection
 
 UTC = dt.timezone.utc
@@ -230,6 +236,36 @@ def test_full_cycle_applies_an_edit_removes_a_deletion_and_purges_a_private_chan
     assert result["complete"] is True
     # A purged channel is reported by id only — never by name.
     assert "soon-secret-room" not in json.dumps(result, default=str)
+
+
+def test_sweep_never_purges_a_public_channel_over_the_stub_guild_bug(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home, tmp_path
+) -> None:
+    """discord-bot-cli#20, the critical case: without the fix, ``_verify``
+    would have checked permissions against the roleless stub guild a raw
+    ``fetch_channel()`` attaches (see tests/test_discord.py's
+    ``_RealisticChannel``/``_UnavailableGuildStub``), reading every
+    genuinely public channel as "not public" and purging it — wiping the
+    whole cache on every sweep. This is the regression test for that.
+    """
+    msgs = _msgs("g", 4)
+    chan = _BackwardChannel("51555", "general", msgs)
+    _install(monkeypatch, {"51555": chan})
+    col = _FakeCollection()
+    _seed(col, "51555")
+
+    # Swap in the realistic (stub-guild-carrying) channel for the sweep's
+    # re-verify step only — the initial seed fetch above already proved the
+    # cache holds 4 messages under a plain, flag-based fake.
+    seam = _discord._seam()
+    seam.channels["51555"] = _RealisticChannel("51555", "general", msgs)
+
+    result = _run_sweep(col, tmp_path)
+
+    row = _row(result, "51555")
+    assert row["purged"] is False
+    assert len(_cached(col, "51555")) == 4
+    assert _coverage.read_coverage("51555", collection=_cov(col)) != []
 
 
 def test_sweep_applies_a_renamed_authors_new_name(
