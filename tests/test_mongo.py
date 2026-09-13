@@ -560,8 +560,9 @@ def test_collection_rejects_connected_server_on_legacy_port(
     fake = _FakePyMongoModuleWithDb(address=("127.0.0.1", 27018))
     monkeypatch.setattr(_mongo, "_seam", lambda: fake)
 
+    open_collection = getattr(_mongo, opener)
     with pytest.raises(CliError) as exc:
-        with getattr(_mongo, opener)():
+        with open_collection():
             pass
     assert exc.value.code == 2
     assert "27018" in exc.value.message
