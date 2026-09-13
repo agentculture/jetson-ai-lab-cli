@@ -479,7 +479,7 @@ def _unpack(result: Any, span: Interval) -> tuple[list[dict], bool, str | None]:
                 "report whether the span was fully drained; refusing to record coverage"
             ),
             remediation=(
-                "return (messages, complete, reason) from the fetcher, as " "_collect_history does"
+                "return (messages, complete, reason) from the fetcher, as _collect_history does"
             ),
         )
     messages, complete, reason = result

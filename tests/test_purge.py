@@ -35,7 +35,7 @@ _KEY_ENV = "JLAB_CACHE_KEY"
 _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(_KEY_ENV, _TEST_KEY)
     return _TEST_KEY
@@ -226,6 +226,18 @@ def test_a_plain_snowflake_is_accepted() -> None:
     assert _purge.validate_target(" 42 ", "author id") == "42"
 
 
+def test_non_ascii_digits_are_refused_not_treated_as_digits() -> None:
+    """S6353: ``\\d`` matches Unicode digits by default; targets must stay ASCII-only.
+
+    "١٢٣" is "123" in Eastern Arabic-Indic digits — ``str.isdigit()`` and a
+    bare ``\\d`` would both accept it, but a bare Discord snowflake is always
+    ASCII, so this must be refused rather than silently normalised.
+    """
+    with pytest.raises(CliError) as excinfo:
+        _purge.validate_target("١٢٣", "author id")
+    assert excinfo.value.code == EXIT_USER_ERROR
+
+
 def test_purge_author_refuses_a_wildcard_before_touching_the_collection(key: str) -> None:
     col = _FakeCollection()
     _cache.store_messages("chan-1", [_message("1")], collection=col)
@@ -306,7 +318,8 @@ def test_report_sweep_removes_only_runs_carrying_the_target(tmp_path) -> None:
 def test_report_sweep_dry_run_removes_nothing(tmp_path) -> None:
     roots, hit_m, _miss, hit_l = _reports_tree(tmp_path)
     result = _purge.sweep_reports("42", report_dirs=roots, dry_run=True)
-    assert hit_m.exists() and hit_l.exists()
+    assert hit_m.exists()
+    assert hit_l.exists()
     assert sorted(result["runs_matched"]) == sorted([str(hit_l), str(hit_m)])
     assert result["runs_removed"] == []
 
@@ -365,7 +378,8 @@ def test_fetch_then_purge_then_search_finds_nothing_for_that_author(key: str, tm
         for path in root.rglob("*"):
             if path.is_file():
                 assert "42" not in path.read_text(encoding="utf-8", errors="ignore")
-    assert not hit_m.exists() and not hit_l.exists()
+    assert not hit_m.exists()
+    assert not hit_l.exists()
     assert miss_m.exists()
 
 
@@ -414,8 +428,48 @@ def test_purge_older_than_prunes_cache_and_stale_report_runs(key: str, tmp_path)
     result = _purge.purge_older_than(5, collection=col, report_dirs=roots, now=now)
     assert result["cache"]["deleted"] == 1
     # every seeded run id predates the cutoff, so every run directory goes
-    assert not hit_m.exists() and not miss_m.exists()
+    assert not hit_m.exists()
+    assert not miss_m.exists()
     assert [m["message_id"] for m in _cache.fetch_messages(collection=col)] == ["new"]
+
+
+def test_purge_older_than_treats_an_invalid_calendar_date_as_unrecognised(
+    key: str, tmp_path
+) -> None:
+    """qodo 3998468651: ``_RUN_STAMP`` matches the *shape* (8 digits, T, 6 digits,
+    Z) but not whether it is a real date — ``20261301T000000Z`` has month 13.
+    ``datetime.strptime`` raises ``ValueError`` on that; the run directory must
+    be treated the same as any other unrecognised name (never guessed at, and
+    never allowed to abort retention after the cache side already purged).
+    """
+    col = _FakeCollection()
+    roots, hit_m, _miss, _hit_l = _reports_tree(tmp_path)
+    bad_stamp_dir = hit_m.parent / "20261301T000000Z-badcal01"
+    bad_stamp_dir.mkdir(parents=True)
+    (bad_stamp_dir / "members-report.html").write_text("<html>nobody</html>", encoding="utf-8")
+    _cache.store_messages(
+        "chan-1",
+        [_message("old", created="2020-01-01T00:00:00+00:00")],
+        collection=col,
+    )
+    now = dt.datetime(2026, 9, 12, tzinfo=dt.timezone.utc)
+
+    result = _purge.purge_older_than(5, collection=col, report_dirs=roots, now=now)
+
+    assert result["cache"]["deleted"] == 1
+    assert not hit_m.exists()
+    # The malformed-date directory is left alone, not removed and not raised on.
+    assert bad_stamp_dir.exists()
+
+
+def test_run_older_than_predicate_does_not_raise_on_an_invalid_calendar_date(
+    tmp_path,
+) -> None:
+    """Unit-level regression for qodo 3998468651, directly on the predicate."""
+    predicate = _purge._run_older_than(dt.datetime(2026, 9, 12, tzinfo=dt.timezone.utc))
+    bad_stamp_dir = tmp_path / "20261301T000000Z-badcal01"
+    bad_stamp_dir.mkdir()
+    assert predicate(bad_stamp_dir) is False
 
 
 def test_purge_older_than_refuses_an_overflowing_window(key: str) -> None:
@@ -437,7 +491,7 @@ def test_purge_older_than_refuses_a_non_positive_window(key: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def cli_env(monkeypatch: pytest.MonkeyPatch, key: str, tmp_path):
     """Point the purge verb at a fake collection and a temp report tree."""
     col = _FakeCollection()
@@ -770,11 +824,10 @@ def test_non_blocking_purge_older_than_refuses_while_a_fetch_holds_a_channel(key
         "777", [_message("1", created="2020-01-01T00:00:00+00:00")], collection=col
     )
     _coverage.widen_coverage("777", _iv(_at(2019, 1), _at(2021, 1)), collection=_cov(col))
+    now = _at(2026, 9, 12)
     with _fetch_holds_lock("777"):
         with pytest.raises(CliError) as excinfo:
-            _purge.purge_older_than(
-                5, collection=col, report_dirs=[], now=_at(2026, 9, 12), blocking=False
-            )
+            _purge.purge_older_than(5, collection=col, report_dirs=[], now=now, blocking=False)
     assert excinfo.value.code == EXIT_ENV_ERROR
     assert len(col.docs) == 1
     assert _coverage.read_coverage("777", collection=_cov(col)) == [_iv(_at(2019, 1), _at(2021, 1))]
@@ -918,8 +971,9 @@ def test_suppression_recorded_under_another_key_blocks_every_store(
     col = _FakeCollection()
     _purge.purge_author(_RAW_AUTHOR, collection=col, report_dirs=[])
     monkeypatch.setenv(_KEY_ENV, base64.urlsafe_b64encode(b"z" * 32).decode())
+    messages = [_message("1", author=_RAW_AUTHOR)]
     with pytest.raises(CliError) as excinfo:
-        _cache.store_messages("777", [_message("1", author=_RAW_AUTHOR)], collection=col)
+        _cache.store_messages("777", messages, collection=col)
     assert excinfo.value.code == EXIT_ENV_ERROR
     assert col.docs == {}
 
@@ -953,7 +1007,8 @@ def test_fetch_purge_search_then_fetch_again_still_finds_nothing(key: str, tmp_p
 
     _purge.purge_author(_RAW_AUTHOR, collection=col, report_dirs=roots)
     assert _search(col, "confession") == []
-    assert not hit_m.exists() and not hit_l.exists()
+    assert not hit_m.exists()
+    assert not hit_l.exists()
 
     # fetch again: a gap-only fetch over a now-uncovered window, and a plain re-store
     _coverage.clear_coverage("777", collection=_cov(col))

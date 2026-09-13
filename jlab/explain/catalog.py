@@ -333,6 +333,8 @@ Omit the channel id to list all channels with coverage records. Pass a channel
 id to show what intervals the cache covers for that channel. With `--since` and
 `--until` (ISO-8601 timestamps), show covered and uncovered spans within that
 time window and whether the window is fully cached (complete) or has gaps.
+`--since`/`--until` require a channel id — passing either without one is a
+code-1 error rather than being silently ignored while the channel list prints.
 
 Without a time window, the verb shows the recorded intervals and notes that
 completeness requires a window. With a window, it shows both covered spans and

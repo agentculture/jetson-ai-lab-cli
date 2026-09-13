@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
+import json
 import os
 import pathlib
 import threading
@@ -35,6 +36,7 @@ import threading
 import pytest
 
 from jlab import coverage as _coverage
+from jlab.cli import main
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 
 UTC = dt.timezone.utc
@@ -81,12 +83,12 @@ class _FakeCollection:
         self.docs.pop(flt["_id"], None)
 
 
-@pytest.fixture()
+@pytest.fixture
 def col() -> _FakeCollection:
     return _FakeCollection()
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_home(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
     """Point the lock tree at a temp dir — never the operator's real home."""
     monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path))
@@ -121,15 +123,19 @@ class _RecordingFetcher:
 
 
 def test_interval_rejects_naive_datetimes() -> None:
+    naive_start = dt.datetime(2026, 1, 1)
+    naive_end = _at(2026, 2)
     with pytest.raises(CliError) as excinfo:
-        _coverage.Interval(dt.datetime(2026, 1, 1), _at(2026, 2))
+        _coverage.Interval(naive_start, naive_end)
     assert excinfo.value.code == EXIT_USER_ERROR
     assert excinfo.value.remediation
 
 
 def test_interval_rejects_reversed_bounds() -> None:
+    later = _at(2026, 2)
+    earlier = _at(2026, 1)
     with pytest.raises(CliError) as excinfo:
-        _coverage.Interval(_at(2026, 2), _at(2026, 1))
+        _coverage.Interval(later, earlier)
     assert excinfo.value.code == EXIT_USER_ERROR
 
 
@@ -466,11 +472,13 @@ def test_a_failed_store_leaves_coverage_unwidened(col: _FakeCollection, lock_hom
     def store(span, messages):
         raise CliError(EXIT_ENV_ERROR, "jlab-mongodb went away", "restart it")
 
+    span = _iv(_at(2026, 1), _at(2026, 2))
+    fetcher = _RecordingFetcher()
     with pytest.raises(CliError):
         _coverage.fetch_missing(
             "chan-1",
-            _iv(_at(2026, 1), _at(2026, 2)),
-            fetch=_RecordingFetcher(),
+            span,
+            fetch=fetcher,
             store=store,
             collection=col,
         )
@@ -488,11 +496,13 @@ def test_an_interrupted_multi_span_run_keeps_the_spans_it_finished(
         if len(calls) == 2:
             raise CliError(EXIT_ENV_ERROR, "interrupted", "retry")
 
+    span = _iv(_at(2026, 1), _at(2026, 5))
+    fetcher = _RecordingFetcher()
     with pytest.raises(CliError):
         _coverage.fetch_missing(
             "chan-1",
-            _iv(_at(2026, 1), _at(2026, 5)),
-            fetch=_RecordingFetcher(),
+            span,
+            fetch=fetcher,
             store=store,
             collection=col,
         )
@@ -688,10 +698,11 @@ def test_a_fetch_that_does_not_say_whether_it_finished_is_refused(
 ) -> None:
     """A bare message list cannot prove the span was drained; refuse it."""
     stored: list[dict] = []
+    span = _iv(_at(2026, 1), _at(2026, 2))
     with pytest.raises(CliError) as excinfo:
         _coverage.fetch_missing(
             "chan-1",
-            _iv(_at(2026, 1), _at(2026, 2)),
+            span,
             fetch=lambda span: [{"id": "m1"}],
             store=lambda span, messages: stored.extend(messages),
             collection=col,
@@ -769,13 +780,15 @@ def test_non_blocking_fetch_on_a_busy_channel_raises_before_fetching(
     fd = os.open(_coverage.lock_path("chan-1"), os.O_RDWR | os.O_CREAT, 0o600)
     result: dict = {}
 
+    span = _iv(_at(2026, 1), _at(2026, 2))
+
     def other_process_holds() -> None:
         # A different open file description, as a second process would have.
         try:
             with pytest.raises(CliError) as excinfo:
                 _coverage.fetch_missing(
                     "chan-1",
-                    _iv(_at(2026, 1), _at(2026, 2)),
+                    span,
                     fetch=fetch,
                     store=_noop,
                     collection=col,
@@ -857,8 +870,9 @@ def test_trim_before_takes_the_channel_lock(
 
 
 def test_trim_before_rejects_a_naive_cutoff(col: _FakeCollection, lock_home) -> None:
+    naive_cutoff = dt.datetime(2025, 1, 1)
     with pytest.raises(CliError):
-        _coverage.trim_before("chan-1", dt.datetime(2025, 1, 1), collection=col)
+        _coverage.trim_before("chan-1", naive_cutoff, collection=col)
 
 
 # ---------------------------------------------------------------------------
@@ -934,3 +948,71 @@ def test_stored_coverage_is_never_wider_than_the_span_at_millisecond_precision(l
     [stored] = _coverage.read_coverage("chan-ms3", collection=col)
     assert stored.start >= start
     assert stored.end <= end
+
+
+# ---------------------------------------------------------------------------
+# The CLI verb (jlab.cli._commands.coverage) — qodo 3998468652
+#
+# ``--since``/``--until`` with no channel_id used to be silently accepted:
+# the verb fell through to "list channels" and exited 0 without ever
+# consulting the bounds. That is a data-loss-shaped footgun for an operator
+# who mistyped the channel id — they'd get a channel list back, not an
+# error, and could easily read the list as "the window is empty" instead of
+# "the window was never applied." It must be a code-1 CliError instead.
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_since_and_until_without_channel_id_is_a_user_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = main(
+        [
+            "discord",
+            "coverage",
+            "--since",
+            "2026-09-01T00:00:00+00:00",
+            "--until",
+            "2026-09-15T00:00:00+00:00",
+        ]
+    )
+    assert rc == EXIT_USER_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "channel_id" in captured.err
+
+
+@pytest.mark.parametrize("bound", ["--since", "--until"])
+def test_coverage_lone_bound_without_channel_id_is_still_the_paired_bound_error(
+    capsys: pytest.CaptureFixture[str], bound: str
+) -> None:
+    """A single lone bound (no channel id either) hits the pre-existing
+    "must be given together" check first — that ordering is unchanged."""
+    rc = main(["discord", "coverage", bound, "2026-09-01T00:00:00+00:00"])
+    assert rc == EXIT_USER_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "must be given together" in captured.err
+
+
+def test_coverage_since_and_until_without_channel_id_is_a_user_error_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = main(
+        [
+            "discord",
+            "coverage",
+            "--since",
+            "2026-09-01T00:00:00+00:00",
+            "--until",
+            "2026-09-15T00:00:00+00:00",
+            "--json",
+        ]
+    )
+    assert rc == EXIT_USER_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["code"] == EXIT_USER_ERROR
+    assert "channel_id" in payload["message"]
+    assert payload["remediation"]

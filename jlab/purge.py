@@ -92,7 +92,7 @@ from jlab import coverage as _coverage
 from jlab import mongo as _mongo
 from jlab.cli._errors import EXIT_ENV_ERROR, EXIT_USER_ERROR, CliError
 
-_SNOWFLAKE = re.compile(r"[0-9]{1,25}")
+_SNOWFLAKE = re.compile(r"\d{1,25}", re.ASCII)
 _RUN_STAMP = re.compile(r"^(\d{8}T\d{6}Z)")
 _RUN_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
@@ -289,7 +289,14 @@ def _run_older_than(cutoff: dt.datetime) -> Any:
         match = _RUN_STAMP.match(run_dir.name)
         if not match:
             return False  # an unrecognised directory is never guessed at
-        stamp = dt.datetime.strptime(match.group(1), _RUN_STAMP_FORMAT)
+        try:
+            stamp = dt.datetime.strptime(match.group(1), _RUN_STAMP_FORMAT)
+        except ValueError:
+            # The prefix matches the shape (8 digits, "T", 6 digits, "Z") but
+            # not a real calendar date/time (e.g. month 13) — treat it the
+            # same as a non-match rather than aborting the whole retention
+            # sweep after the cache side has already been purged.
+            return False
         return stamp.replace(tzinfo=dt.timezone.utc) < cutoff
 
     return _predicate
