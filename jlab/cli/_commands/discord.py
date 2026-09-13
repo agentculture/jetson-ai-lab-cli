@@ -522,6 +522,30 @@ def cmd_discord_fetch(args: argparse.Namespace) -> int:
 # -- purge -------------------------------------------------------------------
 
 
+def _purge_suppression_lines(result: dict, dry: bool) -> list[str]:
+    lines = ["coverage: unchanged (an author purge suppresses the author instead)"]
+    suppression = result.get("suppression") or {}
+    if dry:
+        lines.append("suppression: would record a keyed hash of the author id (not the id)")
+    elif suppression.get("already_present"):
+        lines.append("suppression: already recorded as a keyed hash of the author id")
+    else:
+        lines.append("suppression: recorded a keyed hash of the author id (not the id)")
+    return lines
+
+
+def _purge_coverage_line(target: dict, coverage: dict, dry: bool) -> str:
+    verb = "cleared" if target["kind"] == "channel" else "trimmed to the cutoff"
+    verb = f"would be {verb}" if dry else verb
+    return f"coverage: {verb} for {len(coverage['channels'])} channel(s)"
+
+
+def _purge_run_lines(reports: dict, dry: bool) -> list[str]:
+    listed = reports["runs_matched"] if dry else reports["runs_removed"]
+    verb = "would remove" if dry else "removed"
+    return [f"  {verb} {run}" for run in listed]
+
+
 def _purge_text(result: dict) -> str:
     target = result["target"]
     cache = result["cache"]
@@ -539,20 +563,10 @@ def _purge_text(result: dict) -> str:
     )
     coverage = result.get("coverage") or {"channels": []}
     if target["kind"] == "author":
-        lines.append("coverage: unchanged (an author purge suppresses the author instead)")
-        suppression = result.get("suppression") or {}
-        if dry:
-            lines.append("suppression: would record a keyed hash of the author id (not the id)")
-        elif suppression.get("already_present"):
-            lines.append("suppression: already recorded as a keyed hash of the author id")
-        else:
-            lines.append("suppression: recorded a keyed hash of the author id (not the id)")
+        lines.extend(_purge_suppression_lines(result, dry))
     else:
-        verb = "cleared" if target["kind"] == "channel" else "trimmed to the cutoff"
-        verb = f"would be {verb}" if dry else verb
-        lines.append(f"coverage: {verb} for {len(coverage['channels'])} channel(s)")
-    listed = reports["runs_matched"] if dry else reports["runs_removed"]
-    lines.extend(f"  {'would remove' if dry else 'removed'} {run}" for run in listed)
+        lines.append(_purge_coverage_line(target, coverage, dry))
+    lines.extend(_purge_run_lines(reports, dry))
     return "\n".join(lines)
 
 

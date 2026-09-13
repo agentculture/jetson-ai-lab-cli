@@ -52,13 +52,13 @@ _KEY_ENV = "JLAB_CACHE_KEY"
 _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(_KEY_ENV, _TEST_KEY)
     return _TEST_KEY
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_home(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path / "state"))
     _coverage.release_all_locks()
@@ -596,12 +596,13 @@ def test_refresh_refuses_a_non_public_channel_before_any_history_call(
     col = _FakeCollection()
     chan = _BackwardChannel("50007", "secret-ops", _window_msgs(3), public=False)
     _seam(monkeypatch, chan)
+    cov = _cov(col)
 
     with pytest.raises(CliError) as excinfo:
         _read_mod.serve_read(
             "50007",
             refresh=True,
-            coverage_collection=_cov(col),
+            coverage_collection=cov,
             message_collection=col,
         )
 
@@ -617,12 +618,13 @@ def test_refresh_refuses_a_channel_from_another_guild(
     col = _FakeCollection()
     chan = _BackwardChannel("50008", "elsewhere", _window_msgs(3), public=True, guild_id=999)
     _seam(monkeypatch, chan)
+    cov = _cov(col)
 
     with pytest.raises(CliError) as excinfo:
         _read_mod.serve_read(
             "50008",
             refresh=True,
-            coverage_collection=_cov(col),
+            coverage_collection=cov,
             message_collection=col,
         )
 

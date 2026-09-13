@@ -134,6 +134,9 @@ def preflight(message_collection: Any = None) -> None:
     _crypto._key_material()
     if message_collection is None:
         with _mongo.message_collection():
+            # Open-and-close only: validates JLAB_MONGO_URI reachability
+            # before any Discord history() call proceeds. No read/write
+            # is needed here — the connection attempt itself is the check.
             pass
 
 

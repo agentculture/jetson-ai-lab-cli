@@ -54,13 +54,13 @@ _KEY_ENV = "JLAB_CACHE_KEY"
 _TEST_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 
 
-@pytest.fixture()
+@pytest.fixture
 def key(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv(_KEY_ENV, _TEST_KEY)
     return _TEST_KEY
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_home(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(_coverage.STATE_HOME_ENV, str(tmp_path / "state"))
     _coverage.release_all_locks()
@@ -98,9 +98,10 @@ def test_fetch_refuses_a_non_public_channel_before_any_history_call(
     chan = _BackwardChannel("42001", "secret-ops", _window_msgs(5), public=False)
     _seam(monkeypatch, chan)
     col = _FakeCollection()
+    cov = _cov(col)
 
     with pytest.raises(CliError) as excinfo:
-        _fetch_mod.fetch_channel("42001", coverage_collection=_cov(col), message_collection=col)
+        _fetch_mod.fetch_channel("42001", coverage_collection=cov, message_collection=col)
 
     assert excinfo.value.code == EXIT_USER_ERROR
     assert chan.history_calls == []  # no history() call was ever issued
@@ -128,7 +129,9 @@ def test_fetch_reuses_channel_public_as_the_single_source_of_truth(
     # fully-fetched guild (see its WORKAROUND(discord-bot-cli#20)
     # comment) rather than `chan` itself, so identity is not preserved —
     # but it must be a copy of the SAME channel, not a different one.
-    assert calls and calls[0][0] is not chan and calls[0][0].id == chan.id
+    assert calls
+    assert calls[0][0] is not chan
+    assert calls[0][0].id == chan.id
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +172,10 @@ def test_fetch_refuses_a_channel_from_another_guild_even_via_the_realistic_stub(
     chan = _RealisticChannel("42098", "elsewhere", _window_msgs(2), guild_id=999)
     _seam(monkeypatch, chan)
     col = _FakeCollection()
+    cov = _cov(col)
 
     with pytest.raises(CliError) as info:
-        _fetch_mod.fetch_channel("42098", coverage_collection=_cov(col), message_collection=col)
+        _fetch_mod.fetch_channel("42098", coverage_collection=cov, message_collection=col)
 
     assert info.value.code == EXIT_USER_ERROR
     assert chan.history_calls == []
@@ -305,13 +309,14 @@ def test_fetch_refuses_an_until_at_or_after_now(
     _seam(monkeypatch, chan)
     col = _FakeCollection()
     now = dt.datetime(2026, 9, 12, tzinfo=UTC)
+    cov = _cov(col)
 
     with pytest.raises(CliError) as excinfo:
         _fetch_mod.fetch_channel(
             "42008",
             until=now,
             now=now,
-            coverage_collection=_cov(col),
+            coverage_collection=cov,
             message_collection=col,
         )
     assert excinfo.value.code == EXIT_USER_ERROR
@@ -340,9 +345,10 @@ def test_fetch_rejects_a_non_positive_max_messages(
     chan = _BackwardChannel("42010", "general", _window_msgs(2), public=True)
     _seam(monkeypatch, chan)
     col = _FakeCollection()
+    cov = _cov(col)
     with pytest.raises(CliError) as excinfo:
         _fetch_mod.fetch_channel(
-            "42010", max_messages=0, coverage_collection=_cov(col), message_collection=col
+            "42010", max_messages=0, coverage_collection=cov, message_collection=col
         )
     assert excinfo.value.code == EXIT_USER_ERROR
 
@@ -477,7 +483,7 @@ def test_a_concurrent_fetch_of_the_same_channel_waits_rather_than_interleaving(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def cli_env(monkeypatch: pytest.MonkeyPatch, key: str, lock_home):
     chan = _BackwardChannel("42015", "general", _window_msgs(4), public=True)
     _seam(monkeypatch, chan)
@@ -541,9 +547,10 @@ def test_fetch_refuses_a_channel_from_another_guild_before_any_history_call(
     chan = _BackwardChannel("42090", "elsewhere", _window_msgs(3), public=True, guild_id=999)
     _seam(monkeypatch, chan)
     col = _FakeCollection()
+    cov = _cov(col)
     with pytest.raises(CliError) as info:
         _fetch_mod.fetch_channel(
-            "42090", message_collection=col, coverage_collection=_cov(col), suppression=col
+            "42090", message_collection=col, coverage_collection=cov, suppression=col
         )
     assert info.value.code == EXIT_USER_ERROR
     assert "elsewhere" not in info.value.message
