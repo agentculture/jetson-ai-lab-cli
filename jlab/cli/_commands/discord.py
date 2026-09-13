@@ -1,6 +1,7 @@
 """``jetson-ai-lab-cli discord`` — read-only Discord noun group.
 
-Verbs: channels, read, active, members, links, fetch, purge, sweep, doctor, overview.
+Verbs: channels, read, active, members, links, fetch, search, purge, sweep,
+coverage, doctor, overview.
 
 Read-only only (no post/react/thread). Public channels only by default
 (--all is the sole private opt-in for channel visibility).
