@@ -2,7 +2,7 @@
   "plan_slug": "jlab-discord-paged-read-regex-search",
   "schema_version": 2,
   "created": "2026-09-12T18:43:34Z",
-  "updated": "2026-09-13T01:44:51Z",
+  "updated": "2026-09-13T02:42:02Z",
   "deviations": [
     {
       "id": "d1",
@@ -87,7 +87,611 @@
       "seq": 5
     }
   ],
-  "evidence": [],
-  "deltas": [],
+  "evidence": [
+    {
+      "id": "e1",
+      "obligation_ref": "o1",
+      "test_ref": "tests/test_dependencies.py::test_dependencies_in_approved_allowlist",
+      "behavior_text": "pyproject dependencies outside the approved list fail the build",
+      "contract_text": "approved-dependency allowlist enforced mechanically",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 1 passed in 0.01s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 6
+    },
+    {
+      "id": "e2",
+      "obligation_ref": "o2",
+      "test_ref": "tests/test_invariants.py",
+      "behavior_text": "no module reaching Discord calls a Discord write method; detectors proven against bad snippets",
+      "contract_text": "no Discord write path in the adapter surface",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 18 passed in 0.06s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 7
+    },
+    {
+      "id": "e3",
+      "obligation_ref": "o3",
+      "test_ref": "tests/test_fetch.py::test_fetch_refuses_a_non_public_channel_before_any_history_call tests/test_fetch.py::test_fetch_refuses_a_channel_from_another_guild_before_any_history_call tests/test_fetch.py::test_cli_fetch_of_a_private_channel_exits_1",
+      "behavior_text": "a non-public or other-guild channel is refused before history() with nothing cached",
+      "contract_text": "non-public channel id refused before any history request, no leak",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 3 passed in 0.17s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 8
+    },
+    {
+      "id": "e4",
+      "obligation_ref": "o4",
+      "test_ref": "tests/test_mongo.py::test_mongo_uri_rejects_legacy_ports_explicit tests/test_mongo.py::test_mongo_uri_rejects_omitted_port_defaulting_to_27017 tests/test_mongo.py::test_mongo_uri_rejects_legacy_port_among_multiple_hosts tests/test_mongo.py::test_no_stray_legacy_port_int_literals_in_module_source",
+      "behavior_text": "legacy ports are rejected explicitly, by omission and in multi-host URIs; no stray literals",
+      "contract_text": "connects only to jlab-mongodb, never 27017/27018",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 5 passed in 0.02s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 9
+    },
+    {
+      "id": "e5",
+      "obligation_ref": "o5",
+      "test_ref": "tests/test_discord.py::test_read_messages_429_mid_drain_retries_and_resumes tests/test_sweep.py::test_o20_a_rate_limit_delays_the_sweep_rather_than_narrowing_it",
+      "behavior_text": "a 429 part-way through a backward drain resumes from the cursor and reports complete",
+      "contract_text": "429 mid-drain retried with clamped backoff and resumed; completeness reported",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.21s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 10
+    },
+    {
+      "id": "e6",
+      "obligation_ref": "o6",
+      "test_ref": "tests/test_coverage.py::test_repeat_fetch_of_a_covered_window_issues_strictly_fewer_requests tests/test_fetch.py::test_repeat_fetch_over_a_covered_window_issues_no_further_history_calls",
+      "behavior_text": "second fetch issues strictly fewer requests; a fully covered window issues none",
+      "contract_text": "repeat fetch over a covered window requests only the uncovered span",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.17s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 11
+    },
+    {
+      "id": "e7",
+      "obligation_ref": "o7",
+      "test_ref": "tests/test_fetch.py::test_a_query_after_fetch_never_touches_the_discord_seam_again tests/test_search.py::test_search_never_touches_the_discord_seam",
+      "behavior_text": "fetch then query with a raising seam returns results; search never touches the seam",
+      "contract_text": "a query against a fetched window is served with the Discord seam raising",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.17s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 12
+    },
+    {
+      "id": "e8",
+      "obligation_ref": "o9",
+      "test_ref": "tests/test_cli_contract.py tests/test_cli.py::test_every_registered_command_has_a_catalog_entry",
+      "behavior_text": "every discord verb has --json, catalog entry, and offline errors as error:/hint: or {code,message,remediation}",
+      "contract_text": "stdout/stderr split, --json everywhere, structured errors; teken doctor strict passes",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 68 passed in 0.21s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 13
+    },
+    {
+      "id": "e9",
+      "obligation_ref": "o10",
+      "test_ref": "tests/test_mongo.py::test_check_cache_unreachable_exits_env_error_with_hint tests/test_mongo.py::test_mongo_uri_env_absent_exits_env_error",
+      "behavior_text": "unreachable cache and absent URI exit 2 with a remediation",
+      "contract_text": "absent or unreachable jlab-mongodb is a code-2 error with a hint",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.02s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 14
+    },
+    {
+      "id": "e10",
+      "obligation_ref": "o12",
+      "test_ref": "tests/test_coverage.py::test_coverage_widens_only_after_the_messages_are_written tests/test_coverage.py::test_a_failed_store_leaves_coverage_unwidened tests/test_coverage.py::test_lock_excludes_a_second_holder",
+      "behavior_text": "widen after write, failed store leaves coverage unwidened, a second lock holder is excluded",
+      "contract_text": "coverage widens only after durable writes; same-channel fetches serialised",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 3 passed in 0.04s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 15
+    },
+    {
+      "id": "e11",
+      "obligation_ref": "o13",
+      "test_ref": "tests/test_search.py::test_pathological_pattern_is_bounded_not_hung tests/test_search.py::test_a_well_formed_pattern_within_the_bound_is_not_reported_bounded",
+      "behavior_text": "a catastrophic-backtracking pattern returns bounded=true within the timeout",
+      "contract_text": "pathological regex terminates within a declared bound and reports bounded",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.36s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 16
+    },
+    {
+      "id": "e12",
+      "obligation_ref": "o15",
+      "test_ref": "tests/test_purge.py::test_fetch_then_purge_then_search_finds_nothing_for_that_author tests/test_purge.py::test_fetch_purge_search_then_fetch_again_still_finds_nothing",
+      "behavior_text": "fetch, purge --author, search finds nothing; a later fetch still finds nothing",
+      "contract_text": "purge by author removes cache and derived reports; search finds nothing",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.07s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 17
+    },
+    {
+      "id": "e13",
+      "obligation_ref": "o16",
+      "test_ref": "tests/test_cache.py::test_stored_document_holds_no_plaintext tests/test_cache.py::test_ciphertext_does_not_contain_plaintext",
+      "behavior_text": "stored documents hold no plaintext body or author name",
+      "contract_text": "encryption at rest on and measured",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.03s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 18
+    },
+    {
+      "id": "e14",
+      "obligation_ref": "o18",
+      "test_ref": "tests/test_search.py::test_a_partially_covered_window_reports_the_uncovered_span tests/test_search.py::test_a_channel_with_no_coverage_is_reported_as_uncovered_never_zero_matches tests/test_coverage.py::test_disjoint_fetches_name_the_gap_between_them",
+      "behavior_text": "a search over partial coverage names the gap; no coverage is uncovered, never zero matches",
+      "contract_text": "partially covered window reports its uncovered spans",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 3 passed in 0.18s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 19
+    },
+    {
+      "id": "e15",
+      "obligation_ref": "o19",
+      "test_ref": "tests/test_sweep.py::test_o19_the_cache_converges_to_discord_using_only_the_sweep",
+      "behavior_text": "edits applied, deletions removed, private channels purged, no gateway in the test",
+      "contract_text": "cache converges to Discord using only the sweep, no gateway",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 1 passed in 0.22s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 20
+    },
+    {
+      "id": "e16",
+      "obligation_ref": "o20",
+      "test_ref": "tests/test_sweep.py::test_o20_a_rate_limit_delays_the_sweep_rather_than_narrowing_it tests/test_sweep.py::test_o20_an_incomplete_span_reports_itself_and_deletes_nothing",
+      "behavior_text": "a 429 delays without narrowing; an incomplete span is reported and deletes nothing",
+      "contract_text": "rate limit delays the sweep; an incomplete sweep reports itself",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.23s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 21
+    },
+    {
+      "id": "e17",
+      "obligation_ref": "o21",
+      "test_ref": "tests/test_read.py::test_never_fetched_channel_reports_an_uncovered_gap_not_an_empty_result tests/test_read.py::test_partly_covered_window_reports_the_gap",
+      "behavior_text": "a never-fetched channel reports an uncovered gap, not an empty result",
+      "contract_text": "read on an uncovered window reports the gap and points at --refresh",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.16s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 22
+    },
+    {
+      "id": "e18",
+      "obligation_ref": "o22",
+      "test_ref": "tests/test_read.py::test_default_read_never_touches_the_seam_even_when_uncovered tests/test_read.py::test_refresh_refuses_a_channel_from_another_guild",
+      "behavior_text": "default read never touches a raising seam; --refresh reuses fetch's guards",
+      "contract_text": "--refresh is the only path by which read contacts Discord",
+      "evidence_type": "automated",
+      "strength": "execution",
+      "strength_basis": "named tests ran pass via 'uv run pytest -p no:cacheprovider' at 5ce7e1df66d8: 2 passed in 0.17s",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T02:41:21",
+        "commit": "5ce7e1df66d8"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 23
+    },
+    {
+      "id": "e19",
+      "obligation_ref": "o8",
+      "test_ref": "CLAUDE.md#the-message-cache-full-message-bodies-are-retained-by-decision",
+      "behavior_text": "CLAUDE.md states the three content positions: members no content, links URL-only, cache full bodies by decision",
+      "contract_text": "full bodies retained by decision and CLAUDE.md says so beside the members and links rules",
+      "evidence_type": "manual",
+      "strength": "coverage",
+      "strength_basis": "section read at 5ce7e1df66d8",
+      "outcome": "pass",
+      "run": null,
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 24
+    },
+    {
+      "id": "e20",
+      "obligation_ref": "o14",
+      "test_ref": "README.md#bind-address-and-network-posture",
+      "behavior_text": "README states jlab-mongodb binds 0.0.0.0 and that this is accepted only on the trusted internal network",
+      "contract_text": "bind address and internal-network assumption written beside the setup command",
+      "evidence_type": "manual",
+      "strength": "coverage",
+      "strength_basis": "paragraph read at 5ce7e1df66d8, directly after the docker run command",
+      "outcome": "pass",
+      "run": null,
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 25
+    },
+    {
+      "id": "e21",
+      "obligation_ref": "o16",
+      "test_ref": "jlab discord doctor --json (live)",
+      "behavior_text": "doctor against the running jlab-mongodb reported encrypted=true measured=true AES-256-GCM envelope v2",
+      "contract_text": "encryption at rest is on and doctor reports it as measured",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "live run 2026-09-13 at cb2196c, exit 0; output saved in the run scratchpad (evidence/doctor-live-2026-09-13.json)",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T04:45:00",
+        "commit": "cb2196c"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 26
+    },
+    {
+      "id": "e22",
+      "obligation_ref": "o17",
+      "test_ref": "OriNachum/jetson-bot#2",
+      "behavior_text": "PRIVACY_POLICY.md gains a jlab message cache section covering collection, storage, retention, deletion and sharing",
+      "contract_text": "policy describes this cache specifically and the Developer Portal link resolves to it",
+      "evidence_type": "manual",
+      "strength": "coverage",
+      "strength_basis": "PR opened, not yet merged; the Developer Portal link is an operator action that cannot be checked from here, so this is recorded as not yet met",
+      "outcome": "fail",
+      "run": null,
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 27
+    },
+    {
+      "id": "e23",
+      "obligation_ref": "o11",
+      "test_ref": "tests/test_read.py tests/test_discord.py",
+      "behavior_text": "read is now cache-served: text output is unchanged for a covered window, but --json gained complete (and uncovered when incomplete), and a never-fetched channel reports a gap instead of reading Discord",
+      "contract_text": "a caller passing no new flag gets byte-identical output to today",
+      "evidence_type": "automated",
+      "strength": "coverage",
+      "strength_basis": "superseded by o21 (approved): the unconditional byte-identical promise no longer holds by decision",
+      "outcome": "fail",
+      "run": null,
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 28
+    },
+    {
+      "id": "e24",
+      "obligation_ref": "o18",
+      "test_ref": "docs/motivating-case.md steps 2-4 (live, channel 1327720920206282864)",
+      "behavior_text": "live search over 2026-08-25..26 returned complete=false with that window uncovered and 0 matches; after fetch --until 2026-08-25 stored 21, the same search returned complete=true, uncovered=[], 5 matches",
+      "contract_text": "a partially covered window reports its uncovered spans instead of answering as complete",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "real Discord guild + real jlab-mongodb, recorded in docs/motivating-case.md",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T06:00:00",
+        "commit": "c6baecc"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 29
+    },
+    {
+      "id": "e25",
+      "obligation_ref": "o7",
+      "test_ref": "docs/motivating-case.md step 4 (live)",
+      "behavior_text": "the post-fetch search was served from jlab-mongodb by a verb that never imports the Discord seam",
+      "contract_text": "a query against an already-fetched window is served by the cache, not the network",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "live run plus tests/test_search.py::test_search_module_never_imports_the_discord_seam",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T06:00:00",
+        "commit": "c6baecc"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 30
+    },
+    {
+      "id": "e26",
+      "obligation_ref": "o22",
+      "test_ref": "live read --refresh --limit 20 (channel 1327720920206282864)",
+      "behavior_text": "at 8369887 read --refresh on a real public channel re-read Discord, returned 20 messages with complete=true and no uncovered spans; the demo channel was purged afterwards",
+      "contract_text": "--refresh is the only path by which read contacts Discord",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "live re-check after the stub-guild (c4a4ecb), tz_aware (3ca416d) and millisecond (8369887) fixes; before them every live refresh was refused or reported incomplete",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T06:30:00",
+        "commit": "8369887"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 31
+    },
+    {
+      "id": "e27",
+      "obligation_ref": "o3",
+      "test_ref": "live fetch/read --refresh of a real public channel",
+      "behavior_text": "a real public channel passes the public check and is fetched; before c4a4ecb every real channel was refused because the REST-only client's fetch_channel() attaches a roleless stub guild (lapse l2, discord-bot-cli#20)",
+      "contract_text": "a non-public channel is refused before any history request, and a public one is not",
+      "evidence_type": "observation",
+      "strength": "execution",
+      "strength_basis": "live run on the real guild at c6baecc and 8369887; refusal of private and other-guild channels stays covered by e3",
+      "outcome": "pass",
+      "run": {
+        "timestamp": "2026-09-13T06:30:00",
+        "commit": "8369887"
+      },
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false,
+      "seq": 32
+    }
+  ],
+  "deltas": [
+    {
+      "id": "b1",
+      "kind": "amended",
+      "behavior_text": "cache content is encrypted with AES-256-GCM (cryptography package, envelope v2, 96-bit nonce, key via HKDF from JLAB_CACHE_KEY) instead of t5's hand-rolled HMAC keystream",
+      "caused_by": [
+        "d1"
+      ],
+      "evidence_refs": [
+        "e13"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b2",
+      "kind": "added",
+      "behavior_text": "purge --author records a keyed HMAC of the author id in a suppression list, and store_messages refuses that author's messages on every later fetch, read --refresh and sweep",
+      "caused_by": [
+        "d3"
+      ],
+      "evidence_refs": [
+        "e12"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b3",
+      "kind": "added",
+      "behavior_text": "each cached message also stores the author's name and display name, each as its own AES-256-GCM envelope; read and search show names from the cache and a rename is re-stored by sweep and read --refresh",
+      "caused_by": [
+        "d4"
+      ],
+      "evidence_refs": [
+        "e13"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b4",
+      "kind": "amended",
+      "behavior_text": "discord read is served from the cache by default; its --json output gains complete (and uncovered when incomplete), and an uncovered window reports the gap instead of reading Discord \u2014 the unconditional byte-identical promise no longer holds",
+      "caused_by": [
+        "c2"
+      ],
+      "evidence_refs": [
+        "e17",
+        "e23"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b5",
+      "kind": "amended",
+      "behavior_text": "purge --author never echoes the author id: text reports 'author (id withheld)' and --json reports target {kind: author, value: null, withheld: true} (plan risk r15)",
+      "caused_by": [
+        "c40"
+      ],
+      "evidence_refs": [
+        "e12"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b6",
+      "kind": "amended",
+      "behavior_text": "the public-channel check in fetch, read --refresh and sweep resolves permissions against the fully fetched guild instead of the roleless stub guild fetch_channel() attaches, so real public channels pass and sweep never purges them (lapse l2, discord-bot-cli#20)",
+      "caused_by": [
+        "c8"
+      ],
+      "evidence_refs": [
+        "e3",
+        "e27"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    },
+    {
+      "id": "b7",
+      "kind": "amended",
+      "behavior_text": "cached timestamps decode timezone-aware (pymongo tz_aware=True) and coverage is stored and compared at BSON millisecond precision, so live fetch and read --refresh report complete=true (lapses l3, l4)",
+      "caused_by": [
+        "c22"
+      ],
+      "evidence_refs": [
+        "e10",
+        "e26"
+      ],
+      "origin": "llm",
+      "status": "proposed",
+      "superseded": false
+    }
+  ],
   "supersessions": []
 }
