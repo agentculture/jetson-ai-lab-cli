@@ -24,6 +24,19 @@ from jlab.cli._errors import CliError
 
 _ENV_VAR = "JLAB_MONGO_URI"
 
+
+@pytest.fixture(autouse=True)
+def _reset_index_ensured_cache():
+    """``jlab.mongo._indexes_ensured`` is process-lifetime state (o... , qodo
+    3998468653's "once per process" optimization) — reset it around every
+    test in this file so index-creation assertions don't depend on test
+    order or on what an earlier test in this module already "ensured".
+    """
+    _mongo._indexes_ensured.clear()
+    yield
+    _mongo._indexes_ensured.clear()
+
+
 # ---------------------------------------------------------------------------
 # Fakes — a minimal pymongo double, never the real package.
 # ---------------------------------------------------------------------------
@@ -276,13 +289,35 @@ def test_seam_missing_pymongo_raises_env_error(monkeypatch: pytest.MonkeyPatch) 
 # ---------------------------------------------------------------------------
 
 
+class _FakeCollectionHandle(str):
+    """A ``str`` that also tolerates ``.create_index(...)`` like a real
+    pymongo ``Collection`` would.
+
+    Existing assertions compare the yielded handle against a plain
+    ``"collection:<name>"`` string (``col == f"collection:{name}"``); this
+    keeps that equality while recording every ``create_index`` call so tests
+    can assert on index creation (qodo 3998468653) without breaking those.
+    """
+
+    def __new__(cls, value: str) -> "_FakeCollectionHandle":
+        obj = super().__new__(cls, value)
+        obj.index_calls = []  # type: ignore[attr-defined]
+        return obj
+
+    def create_index(self, *a, **kw) -> None:
+        self.index_calls.append((a, kw))  # type: ignore[attr-defined]
+
+
 class _FakeDatabase:
     def __init__(self) -> None:
         self.asked: list[str] = []
+        self._collections: dict[str, _FakeCollectionHandle] = {}
 
-    def __getitem__(self, name: str) -> str:
+    def __getitem__(self, name: str) -> _FakeCollectionHandle:
         self.asked.append(name)
-        return f"collection:{name}"
+        if name not in self._collections:
+            self._collections[name] = _FakeCollectionHandle(f"collection:{name}")
+        return self._collections[name]
 
 
 class _FakeClientWithDb(_FakeClient):
@@ -298,7 +333,7 @@ class _FakeClientWithDb(_FakeClient):
 
 class _FakePyMongoModuleWithDb(_FakePyMongoModule):
     def MongoClient(self, uri, **kw):
-        client = _FakeClientWithDb(uri, address=self._address)
+        client = _FakeClientWithDb(uri, address=self._address, raise_on_ping=self._raise_on_ping)
         self.last_client = client
         return client
 
@@ -458,3 +493,161 @@ def test_sibling_collection_without_a_database_fails_closed() -> None:
         _mongo.sibling_collection(object(), "suppression")
     assert exc.value.code == 2
     assert exc.value.remediation
+
+
+# ---------------------------------------------------------------------------
+# mongodb+srv:// is rejected outright (qodo 3998468658, part a)
+# ---------------------------------------------------------------------------
+
+
+def test_mongo_uri_rejects_srv_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb+srv://cluster0.example.mongodb.net/jlab")
+    with pytest.raises(CliError) as exc:
+        _mongo._mongo_uri()
+    assert exc.value.code == 2
+    assert "srv" in exc.value.message.lower()
+    assert exc.value.remediation
+
+
+def test_check_cache_rejects_srv_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No connection is ever opened for a rejected +srv URI (the fake would
+    raise on any real network use; here it just proves unreachable, since
+    check_cache calls _seam() before validating uri passed explicitly — the
+    rejection itself is what's under test)."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb+srv://cluster0.example.mongodb.net/jlab")
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        _mongo.check_cache()
+    assert exc.value.code == 2
+    assert "srv" in exc.value.message.lower()
+
+
+def test_message_collection_rejects_srv_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb+srv://cluster0.example.mongodb.net/jlab")
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.message_collection():
+            pass
+    assert exc.value.code == 2
+
+
+def test_srv_scheme_rejected_even_when_uri_passed_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The explicit-uri path (bypassing the env var) is guarded too."""
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setattr(_mongo, "_seam", lambda: _FakePyMongoModuleWithDb())
+    with pytest.raises(CliError) as exc:
+        with _mongo.message_collection(uri="mongodb+srv://cluster0.example.mongodb.net/jlab"):
+            pass
+    assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# _collection() rejects a connected server on a legacy port, not just
+# check_cache() (qodo 3998468658, part b) — DNS aliasing / a hostname that
+# happens to resolve to 27017/27018.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "opener", ["message_collection", "coverage_collection", "suppression_collection"]
+)
+def test_collection_rejects_connected_server_on_legacy_port(
+    monkeypatch: pytest.MonkeyPatch, opener: str
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://jlab-alias:27019/jlab")
+    fake = _FakePyMongoModuleWithDb(address=("127.0.0.1", 27018))
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with pytest.raises(CliError) as exc:
+        with getattr(_mongo, opener)():
+            pass
+    assert exc.value.code == 2
+    assert "27018" in exc.value.message
+    assert fake.last_client is not None
+    assert fake.last_client.closed is True
+
+
+def test_collection_rejects_unreachable_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_collection() surfaces the same unreachable-server error check_cache does."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb(raise_on_ping=_FakePyMongoError("connection refused"))
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with pytest.raises(CliError) as exc:
+        with _mongo.message_collection():
+            pass
+    assert exc.value.code == 2
+    assert exc.value.remediation
+    assert fake.last_client is not None
+    assert fake.last_client.closed is True
+
+
+def test_collection_accepts_a_connected_server_on_a_dedicated_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb(address=("localhost", 27019))
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.message_collection() as col:
+        assert col == f"collection:{_mongo.MESSAGES_COLLECTION}"
+
+
+# ---------------------------------------------------------------------------
+# Indexes on the messages collection (qodo 3998468653)
+# ---------------------------------------------------------------------------
+
+
+def test_message_collection_creates_expected_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.message_collection() as col:
+        pass
+
+    keys = [a[0] for a, _kw in col.index_calls]
+    assert [("channel_id", 1), ("created_at", 1)] in keys
+    assert "author_id" in keys
+    assert "created_at" in keys
+
+
+def test_message_collection_index_creation_is_idempotent_per_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_index runs once per process (module-level flag), not on every open."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.message_collection() as first:
+        first_calls = list(first.index_calls)
+    with _mongo.message_collection() as second:
+        second_calls = list(second.index_calls)
+
+    assert first_calls  # created the first time this process opened it
+    assert second_calls == []  # skipped the second time — already ensured
+
+
+def test_coverage_collection_creates_no_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """coverage is looked up/written solely by _id, already default-indexed."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.coverage_collection() as col:
+        pass
+    assert col.index_calls == []
+
+
+def test_suppression_collection_creates_no_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """suppression is looked up/written solely by _id, already default-indexed."""
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _FakePyMongoModuleWithDb()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+
+    with _mongo.suppression_collection() as col:
+        pass
+    assert col.index_calls == []

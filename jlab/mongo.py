@@ -17,11 +17,21 @@ port is explicit, implied by a multi-host list, or simply omitted (a bare
 omitted port is rejected too — see ``_MONGO_DEFAULT_PORT``). No other module
 should read ``JLAB_MONGO_URI`` directly; go through this one.
 
-:func:`check_cache` additionally verifies the *actual* server reached (its
-post-connection ``client.address``) is not on a legacy port, covering DNS
-aliasing / SRV records / anything the URI string alone can't catch — the
-instance-identity check is on the server actually reached, not just on the
-URI text.
+``mongodb+srv://`` URIs are rejected outright (:func:`_reject_srv_uri`): they
+resolve their real hosts/ports via a DNS SRV lookup the URI text never
+carries, so the port-literal checks below can't see through them at all.
+jlab-mongodb is a dedicated instance reached at one fixed host:port — there
+is no legitimate reason for jlab to use ``+srv``.
+
+Beyond the URI text, :func:`_verify_connected_identity` verifies the *actual*
+server reached (its post-connection ``client.address``) is not on a legacy
+port, covering DNS aliasing / a hostname that happens to resolve to 27017 or
+27018 / anything the URI string alone can't catch. Both :func:`check_cache`
+(the doctor path) and :func:`_collection` (every other caller — fetch,
+search, coverage, purge, sweep) call this same helper before doing anything
+else with the connection, so the instance-identity check is on the server
+actually reached everywhere a collection handle is produced, not just on the
+URI text and not just in doctor.
 
 Lazy-import: ``pymongo`` is **never** imported at module scope, mirroring
 :func:`jlab.cli._discord._seam`. This keeps this task's tests (and this
@@ -106,6 +116,34 @@ def _hosts_and_ports(uri: str) -> list[tuple[str, int]]:
     return pairs
 
 
+def _reject_srv_uri(uri: str) -> None:
+    """Reject a ``mongodb+srv://`` URI outright (qodo 3998468658).
+
+    ``+srv`` URIs carry no host/port in their text — they resolve via a DNS
+    SRV lookup pymongo performs internally — so :func:`_hosts_and_ports` and
+    :func:`_reject_legacy_ports` have nothing to check syntactically, and a
+    hostname behind the SRV record could still resolve to a legacy port.
+    jlab-mongodb is a dedicated instance at a fixed host:port; there is no
+    legitimate reason for jlab to point at a ``+srv`` connection string, so
+    it is refused before any connection is attempted rather than relying on
+    the (necessarily post-connection) identity check to catch it.
+    """
+    if uri.startswith("mongodb+srv://"):
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=(
+                f"{_MONGO_URI_ENV} uses mongodb+srv://, which resolves its real "
+                "host and port via a DNS SRV lookup jlab cannot verify against "
+                "the legacy-port guard"
+            ),
+            remediation=(
+                "jlab-mongodb is a dedicated instance reached at one fixed "
+                f"host:port — set {_MONGO_URI_ENV} to a plain mongodb:// URI "
+                "naming that host:port explicitly, not mongodb+srv://"
+            ),
+        )
+
+
 def _reject_legacy_ports(uri: str) -> None:
     for host, port in _hosts_and_ports(uri):
         if port in _FORBIDDEN_PORTS:
@@ -144,6 +182,7 @@ def _mongo_uri() -> str:
                 "README for the container setup"
             ),
         )
+    _reject_srv_uri(uri)
     _reject_legacy_ports(uri)
     return uri
 
@@ -164,6 +203,93 @@ def _seam() -> Any:
     return pymongo
 
 
+def _verify_connected_identity(pymongo: Any, client: Any) -> tuple[Any, Any]:
+    """Ping *client*, forcing server selection, and reject a legacy-port server.
+
+    pymongo selects a server lazily — ``client.address`` is unset until some
+    operation actually runs — so a plain ``ping`` both forces that selection
+    and confirms reachability in the same round trip. This is the single
+    place that inspects the address *actually* connected (as opposed to the
+    URI text :func:`_reject_legacy_ports` checks), so it catches DNS
+    aliasing or any hostname that happens to resolve to a legacy port.
+    :func:`check_cache` and :func:`_collection` both call this — the check
+    lives once, here, rather than being duplicated (and able to drift)
+    between the doctor path and every other caller.
+
+    Raises :class:`CliError` (code 2) if the server is unreachable, or if it
+    answers on a forbidden port. Returns ``(host, port)`` on success.
+    """
+    try:
+        client.admin.command("ping")
+    except pymongo.errors.PyMongoError as exc:
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=f"jlab-mongodb is unreachable at the configured URI: {exc}",
+            remediation=(
+                "start the jlab-mongodb container and verify "
+                f"{_MONGO_URI_ENV}, then retry (see README for the "
+                "container setup)"
+            ),
+        ) from exc
+
+    address = client.address
+    host = address[0] if address else None
+    port = address[1] if address else None
+    if port in _FORBIDDEN_PORTS:
+        legacy = "qq-mongodb (legacy)" if port == 27017 else "eidetic-mongo (memory store)"
+        raise CliError(
+            code=EXIT_ENV_ERROR,
+            message=(f"connected to {host}:{port}, which is {legacy}, not jlab's own instance"),
+            remediation=(
+                f"point {_MONGO_URI_ENV} at jlab's own dedicated "
+                "jlab-mongodb instance, on a port that is neither 27017 "
+                "nor 27018"
+            ),
+        )
+    return host, port
+
+
+# Collections whose indexes have already been ensured this process (qodo
+# 3998468653). create_index is idempotent server-side, but a collection
+# handle is opened fresh (a new client) on every _collection() call, so
+# without this a single CLI invocation that opens the messages collection
+# several times (fetch paging one channel after another, sweep across many
+# channels) would repeat the same create_index round trips every time.
+# Keying by collection name is enough: one process talks to exactly one
+# jlab-mongodb database for its whole lifetime (the URI is read once, at
+# start, from JLAB_MONGO_URI).
+_indexes_ensured: set[str] = set()
+
+
+def _ensure_indexes(collection: Any, name: str) -> None:
+    """Create *name*'s indexes if this process hasn't already done so.
+
+    * ``messages`` — :mod:`jlab.cache` queries and sorts by ``channel_id`` +
+      ``created_at`` (paged read, regex search) and deletes by ``author_id``
+      and by ``created_at`` alone (purge's ``--author`` / ``--older-than``),
+      so those three get indexes. The upsert key in
+      :func:`jlab.cache.store_messages` is ``_id`` (the Discord message id
+      itself, str-encoded) — not a ``(channel_id, message_id)`` compound —
+      and Discord message ids are already globally unique snowflakes, so
+      MongoDB's own default unique ``_id`` index already covers the upsert
+      key. Adding a *second*, redundant unique index here would buy nothing
+      and risks a spurious failure if any historical document ever violated
+      it; it is deliberately not added.
+    * ``coverage`` and ``suppression`` — both are looked up and written
+      solely by ``_id`` (the channel id / the HMAC author digest,
+      respectively — see :mod:`jlab.coverage` and
+      :func:`jlab.cache.suppress_author`), which is already covered by
+      MongoDB's default ``_id`` index. Neither needs an extra index.
+    """
+    if name in _indexes_ensured:
+        return
+    if name == MESSAGES_COLLECTION:
+        collection.create_index([("channel_id", 1), ("created_at", 1)])
+        collection.create_index("author_id")
+        collection.create_index("created_at")
+    _indexes_ensured.add(name)
+
+
 @contextmanager
 def _collection(name: str, uri: str | None) -> Iterator[Any]:
     """Yield collection *name* from jlab-mongodb, closing the client afterwards.
@@ -182,9 +308,16 @@ def _collection(name: str, uri: str | None) -> Iterator[Any]:
     compare offset-naive and offset-aware datetimes``. Forcing tz_aware here,
     the single choke point every collection handle is built from, decodes
     them back as aware UTC instead.
+
+    Before yielding, :func:`_verify_connected_identity` forces server
+    selection and rejects a connection that turns out to be on a legacy
+    port even though the URI text passed :func:`_reject_legacy_ports` — the
+    same check :func:`check_cache` runs, so every caller of this module gets
+    the instance-identity guarantee doctor already had, not just doctor.
     """
     pymongo = _seam()
     resolved_uri = _mongo_uri() if uri is None else uri
+    _reject_srv_uri(resolved_uri)
     _reject_legacy_ports(resolved_uri)
     client = pymongo.MongoClient(
         resolved_uri,
@@ -193,8 +326,11 @@ def _collection(name: str, uri: str | None) -> Iterator[Any]:
         tz_aware=True,
     )
     try:
+        _verify_connected_identity(pymongo, client)
         database = client.get_default_database(default=_DEFAULT_DB_NAME)
-        yield database[name]
+        col = database[name]
+        _ensure_indexes(col, name)
+        yield col
     finally:
         client.close()
 
@@ -258,6 +394,7 @@ def check_cache(uri: str | None = None) -> dict[str, object]:
     failure: every failure path raises.
     """
     resolved_uri = _mongo_uri() if uri is None else uri
+    _reject_srv_uri(resolved_uri)
     _reject_legacy_ports(resolved_uri)
 
     pymongo = _seam()
@@ -265,35 +402,7 @@ def check_cache(uri: str | None = None) -> dict[str, object]:
         resolved_uri, serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS
     )
     try:
-        try:
-            client.admin.command("ping")
-        except pymongo.errors.PyMongoError as exc:
-            raise CliError(
-                code=EXIT_ENV_ERROR,
-                message=f"jlab-mongodb is unreachable at the configured URI: {exc}",
-                remediation=(
-                    "start the jlab-mongodb container and verify "
-                    f"{_MONGO_URI_ENV}, then retry (see README for the "
-                    "container setup)"
-                ),
-            ) from exc
-
-        address = client.address
-        host = address[0] if address else None
-        port = address[1] if address else None
-        if port in _FORBIDDEN_PORTS:
-            legacy = "qq-mongodb (legacy)" if port == 27017 else "eidetic-mongo (memory store)"
-            raise CliError(
-                code=EXIT_ENV_ERROR,
-                message=(
-                    f"connected to {host}:{port}, which is {legacy}, not jlab's " "own instance"
-                ),
-                remediation=(
-                    f"point {_MONGO_URI_ENV} at jlab's own dedicated "
-                    "jlab-mongodb instance, on a port that is neither 27017 "
-                    "nor 27018"
-                ),
-            )
+        host, port = _verify_connected_identity(pymongo, client)
     finally:
         client.close()
 
