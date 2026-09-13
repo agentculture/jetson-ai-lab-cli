@@ -2,15 +2,21 @@
 
 Discord-facing knowledge fetch & index agent for the Jetson AI Lab community — fetches and indexes Jetson AI Lab docs/sources and answers members' questions on Discord.
 
-> **Status:** the read side is real, the rest is still scaffold. The agent can
-> **scan the Jetson AI Lab Discord read-only today** (see below); indexing what it
-> reads and answering members' questions are not built yet.
+> **Status:** the read side is real and now includes a paged, cache-backed
+> history and search pipeline — the rest is still scaffold. The agent can
+> **read, page past Discord's 100-message cap, search, and reconcile the
+> Jetson AI Lab Discord read-only today** (see below); indexing what it reads
+> into a queryable corpus and answering members' questions are not built yet.
 
 ## What you get
 
-- **A read-only Jetson AI Lab Discord scanner** — the `jetson-discord-scan` skill,
-  the first slice of the agent's actual job. See
-  [Jetson AI Lab Discord](#jetson-ai-lab-discord-read-only).
+- **A read-only Jetson AI Lab Discord scanner, fetch/search pipeline, and
+  reports** — the `jetson-discord-scan` skill's original scan, plus
+  `fetch`/`search`/`read --refresh`/`sweep`/`purge` (paged history past the
+  100-message cap, cache-served regex search, daily reconciliation, and
+  retention-bound deletion) and the `members`/`links` reports. See
+  [Jetson AI Lab Discord](#jetson-ai-lab-discord-read-only) and
+  [Paged history, search, and retention](#paged-history-search-and-retention).
 - **An agent-first CLI** cited from [teken](https://github.com/agentculture/teken)
   (`afi-cli`) — the runtime package has no third-party dependencies.
 - **A mesh identity** — `culture.yaml` (`suffix` + `backend`) and the matching
@@ -73,8 +79,9 @@ stderr.
 
 ### The jlab-mongodb cache
 
-The paged-read/search path (`jlab discord fetch`/`read`/`search`, still
-landing — see the plan) caches message history in a **dedicated** MongoDB
+The paged-read/search path (`jlab discord fetch`/`read --refresh`/`search`/
+`coverage`/`sweep`/`purge` — see [Paged history, search, and retention](#paged-history-search-and-retention)
+below) caches message history in a **dedicated** MongoDB
 instance, `jlab-mongodb`. It is deliberately its own container: this machine
 already runs two unrelated `mongod`s — `qq-mongodb` on port 27017 (a legacy
 instance) and `eidetic-mongo` on port 27018 (the shared eidetic memory store)
@@ -108,9 +115,12 @@ without decrypting, and fails if the marker is found in it. The construction is
 AES-256-GCM from the approved `cryptography` dependency, with the content key
 derived from `JLAB_CACHE_KEY` via HKDF-SHA256 and a fresh 96-bit nonce per
 message. It protects content at rest, not against anyone holding the key, and
-there is no key rotation; `jlab/crypto.py`'s docstring states the limits in full. Message *metadata* (channel id, author id,
-timestamps, jump URL) is stored in the clear on purpose so the cache stays
-queryable; only the body is encrypted.
+there is no key rotation; `jlab/crypto.py`'s docstring states the limits in
+full. Message *metadata* (channel id, author id, timestamps, jump URL) is
+stored in the clear on purpose so the cache stays queryable; the body **and**,
+per deviation d4, the author's name and display name are encrypted — a paged
+read or search can show who said something without a live Discord lookup,
+with ids and every timestamp still cleartext.
 
 Each cached message carries three timestamps — `created_at` (Discord's),
 `updated_at` (Discord's edit timestamp, `null` when unedited) and `stored_at`
@@ -229,6 +239,130 @@ old `--from-cache` copy says so rather than presenting stale links as live.
 
 `discord read` and `discord active` are unchanged by any of this — `links` is
 a new, additive verb alongside them.
+
+## Paged history, search, and retention
+
+Discord's own API caps a single read at 100 messages. This pipeline — `fetch`,
+`read --refresh`, `search`, `coverage`, `sweep`, `purge` — pages a public
+channel's full history into the [jlab-mongodb cache](#the-jlab-mongodb-cache)
+past that cap, searches it, keeps it honest against live edits/deletions, and
+deletes from it on request. Every verb below supports `--json`; the text
+examples are for a maintainer reading a terminal, the `--json` ones for an
+agent consuming the same run.
+
+### `jlab discord fetch` — page history past the 100-message cap
+
+```bash
+jlab discord fetch 1327720920206282864                    # drain to the channel's beginning
+jlab discord fetch 1327720920206282864 --until 2026-08-25  # only back to this date
+jlab discord fetch 1327720920206282864 --max-messages 500 --json
+```
+
+`--until` bounds how far back the drain goes (default: the channel's
+beginning); `--max-messages` bounds the total messages fetched in this one
+invocation (default: unbounded). Either way, `jlab.coverage` decides what is
+*actually* requested — a re-run only pages the gaps still missing, never
+re-fetching what a previous run already stored. The `--json` payload reports
+`stored`/`suppressed` counts and the spans fetched vs. already covered.
+
+### `jlab discord search` — cache-served regex search
+
+```bash
+jlab discord search 1327720920206282864 --grep 'orin nano' \
+  --since 2026-08-25T00:00:00+00:00 --until 2026-08-26T00:00:00+00:00
+jlab discord search 1327720920206282864 --grep 'orin nano' --json
+```
+
+`search` never opens a Discord session — it only ever reads what `fetch`
+already cached. If the requested window isn't fully covered it says so
+(`uncovered: [...]`, `complete: false`) rather than returning an empty result
+that would read as a false "no matches" — run `fetch` to fill the gap before
+trusting a negative. `--max-matches` stops early; `--timeout` bounds the
+regex match itself in a child process so a pathological pattern is killed
+rather than hanging.
+
+### `jlab discord read --refresh` — a live re-read, not just a gap fill
+
+```bash
+jlab discord read 1327720920206282864              # cache-served, no network call
+jlab discord read 1327720920206282864 --refresh     # live re-read of the recent window
+jlab discord read 1327720920206282864 --refresh --limit 100 --json
+```
+
+Without `--refresh`, `read` never touches Discord — it serves the most recent
+`--limit` messages from the cache and reports `complete`/`uncovered` exactly
+like `search` does. `--refresh` live re-reads that same window and reconciles
+it (edits and new messages stored, deletions removed, coverage widened) so an
+edit or deletion *inside* an already-covered window surfaces too, not just
+gaps a plain `fetch` would find.
+
+### `jlab discord coverage` — what the cache actually holds
+
+```bash
+jlab discord coverage                                       # every channel with coverage
+jlab discord coverage 1327720920206282864                   # that channel's covered intervals
+jlab discord coverage 1327720920206282864 \
+  --since 2026-08-25T00:00:00+00:00 --until 2026-08-26T00:00:00+00:00 --json
+```
+
+With no `--since`/`--until`, this lists recorded intervals only — `complete`
+is reported as `null` because completeness is meaningless without a window.
+Pass both bounds to see the covered/uncovered spans and whether that specific
+window is fully cached.
+
+### `jlab discord sweep` — the daily reconciliation pass
+
+```bash
+jlab discord sweep
+jlab discord sweep --json
+```
+
+One idempotent pass over every channel with a coverage record: re-verifies
+each is still public and in the configured guild (purging, by id only, one
+that is gone, foreign, or newly private — a channel it can't re-verify due to
+an outage is left alone and reported incomplete, never purged on ambiguous
+evidence), then re-reads every covered interval so edits are applied and
+deletions removed — deletion only inside a span re-read *completely*. Meant
+to run daily from cron; jlab builds no scheduler of its own:
+
+```cron
+# Reconcile the cache with Discord every day at 03:00.
+0 3 * * * cd /path/to/jetson-ai-lab-cli && \
+  JLAB_MONGO_URI=... JLAB_CACHE_KEY=... DISCORD_BOT_TOKEN=... \
+  uv run --extra discord jlab discord sweep --json >> /var/log/jlab-sweep.log 2>&1
+```
+
+### `jlab discord purge` — per-person, per-channel, and retention-bound deletion
+
+```bash
+jlab discord purge --channel 1327720920206282864          # dry run: previews only
+jlab discord purge --channel 1327720920206282864 --yes    # actually deletes
+jlab discord purge --author <author_id> --yes --json
+jlab discord purge --older-than 90 --yes                  # retention sweep
+```
+
+Exactly one target per call: `--author`, `--channel`, or `--older-than DAYS`.
+**Without `--yes` the verb is a dry run** — it reports what would be removed
+and deletes nothing. With it, it deletes matching cache content, clears (or
+trims) the affected coverage so a purged window reads back as a genuine gap,
+and removes every report run (`members`/`links`, including a `links`
+`-cache` sibling) that mentions the target — whole-run, never row-edited,
+since a run is one internally-consistent artifact set. An author purge never
+prints the author id back (`target.value` is withheld) and records only a
+keyed hash of it in a suppression list, so a racing `fetch`/`sweep` can never
+re-admit that author's messages. Meant to run from cron beside the daily
+sweep, backing the published retention policy:
+
+```cron
+# Drop cached messages and report runs older than the retention window, daily at 03:15.
+15 3 * * * cd /path/to/jetson-ai-lab-cli && \
+  JLAB_MONGO_URI=... JLAB_CACHE_KEY=... DISCORD_BOT_TOKEN=... \
+  uv run --extra discord jlab discord purge --older-than 90 --yes --json >> /var/log/jlab-purge.log 2>&1
+```
+
+A worked example of this whole pipeline run for real against the live guild —
+an uncovered search, a fetch, the same search returning matches, and a final
+purge — is recorded in [`docs/motivating-case.md`](docs/motivating-case.md).
 
 ## Make it your own
 

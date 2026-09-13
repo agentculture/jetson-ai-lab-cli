@@ -42,6 +42,7 @@ from tests.test_discord import (
     _BackwardChannel,
     _FakeGuild,
     _FakeSeam,
+    _RealisticChannel,
     _window_msgs,
 )
 from tests.test_purge import _FakeCollection
@@ -277,6 +278,33 @@ def test_refresh_routes_through_fetch_channel_then_serves_from_cache(
     assert len(result["messages"]) == 4
     assert chan.history_calls  # the guarded live path actually ran
     assert len(_cache.fetch_messages("50006", collection=col)) == 4
+
+
+def test_refresh_of_a_public_channel_succeeds_despite_the_stub_guild(
+    monkeypatch: pytest.MonkeyPatch, key: str, lock_home
+) -> None:
+    """discord-bot-cli#20: ``--refresh`` reuses ``jlab.fetch.validated_channel``
+    (see its WORKAROUND(discord-bot-cli#20) comment / tests/test_discord.py's
+    ``_RealisticChannel``), so it must resolve the public check against the
+    guild ``fetch_guild()`` returned, not the roleless stub ``fetch_channel()``
+    attaches — or a real ``--refresh`` would refuse every public channel.
+    """
+    col = _FakeCollection()
+    chan = _RealisticChannel("50007", "general", _window_msgs(3))
+    _seam(monkeypatch, chan)
+
+    result = _read_mod.serve_read(
+        "50007",
+        limit=3,
+        refresh=True,
+        coverage_collection=_cov(col),
+        message_collection=col,
+    )
+
+    assert result["complete"] is True
+    assert len(result["messages"]) == 3
+    assert chan.history_calls
+    assert len(_cache.fetch_messages("50007", collection=col)) == 3
 
 
 def test_refresh_applies_an_edit_inside_an_already_covered_window(

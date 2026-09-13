@@ -44,6 +44,7 @@ reimplementing ``fetch_missing``'s gap/lock/widen logic here.
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 from typing import Any
 
@@ -148,7 +149,11 @@ async def validated_channel(client: Any, channel_id: int, gid: int) -> Any:
     channel = await client.fetch_channel(channel_id)
     everyone = guild.default_role
     # The bot may belong to other guilds; a channel id from one of them
-    # would otherwise pass the public test against OUR @everyone role.
+    # would otherwise pass the public test against OUR @everyone role. This
+    # uses the ``.guild`` discord.py attached to *channel* itself (from the
+    # raw fetch_channel payload's own guild_id) — never the patched one
+    # below — so a cross-guild id is still caught before it borrows our
+    # guild's identity.
     owner = getattr(getattr(channel, "guild", None), "id", None)
     if owner is None or int(owner) != int(gid):
         raise CliError(
@@ -159,10 +164,28 @@ async def validated_channel(client: Any, channel_id: int, gid: int) -> Any:
                 "run `jetson-ai-lab-cli discord channels` to list them"
             ),
         )
+    # WORKAROUND(discord-bot-cli#20): discord_bot_cli's client runs
+    # gateway-less (Intents.none(), REST only), so its internal guild cache
+    # is always empty. discord.py's Client.fetch_channel() resolves a guild
+    # channel's ``.guild`` via ``_get_or_create_unavailable_guild``, which —
+    # finding nothing cached — synthesizes an "unavailable" stub Guild with
+    # no roles. That stub's ``default_role`` is ``None``, so
+    # ``channel.permissions_for(...)`` always collapses to
+    # ``Permissions.none()`` and _channel_public reads every real public
+    # channel as private (measured live against the Jetson AI Lab guild:
+    # every channel failed the public check before this fix). The guild
+    # object this function already fetched via ``client.fetch_guild(gid)``
+    # IS fully populated (roles included, straight from the API payload),
+    # and the owner check above has just confirmed *channel* really belongs
+    # to it — so resolve permissions against a shallow copy carrying that
+    # guild, never by mutating *channel* itself (the object discord.py (or a
+    # test double) may hand back for reuse across further calls).
+    permission_probe = copy.copy(channel)
+    permission_probe.guild = guild
     # o3: the public check is re-applied to THIS id, not inherited from a
     # listing, and runs before any history() call — _channel_public is
     # the single source of the public test (never re-derived here).
-    if _discord._channel_public(channel, everyone) is not True:
+    if _discord._channel_public(permission_probe, everyone) is not True:
         raise CliError(
             code=EXIT_USER_ERROR,
             message=f"refusing to access channel {channel_id}: not a public channel",

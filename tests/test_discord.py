@@ -2164,6 +2164,58 @@ class _BackwardChannel:
         return _gen()
 
 
+# ---------------------------------------------------------------------------
+# discord-bot-cli#20 — the roleless "unavailable" guild stub.
+#
+# discord_bot_cli's client runs gateway-less (``Intents.none()``, REST only),
+# so discord.py's internal guild cache is always empty. ``Client.
+# fetch_channel()`` resolves a fetched channel's ``.guild`` via
+# ``ConnectionState._get_or_create_unavailable_guild`` — finding nothing
+# cached, it synthesizes an "unavailable" stub ``Guild`` whose id is correct
+# but whose roles are never populated, so its ``default_role`` is ``None``.
+# Real discord.py's ``permissions_for`` reads
+# ``Permissions(self.guild.default_role.permissions.value)`` as its base, so
+# a ``None`` default_role collapses every permission to false — every real
+# public channel reads as private. ``Client.fetch_guild()`` returns a
+# properly populated guild instead (default_role set, from real role data).
+# These fakes model that shape precisely, rather than a bare public/private
+# flag, so a regression here is caught even if a future change re-derives
+# the public check from ``permissions_for`` in a way a flag-based fake could
+# not expose.
+# ---------------------------------------------------------------------------
+
+
+class _UnavailableGuildStub:
+    """The roleless stub ``fetch_channel()`` attaches: correct id, no roles."""
+
+    def __init__(self, id: int) -> None:
+        self.id = id
+        self.default_role = None
+
+
+class _RealisticChannel(_BackwardChannel):
+    """A channel whose ``permissions_for`` behaves like real discord.py's:
+    it reads ``self.guild.default_role``, never a bare ``public`` flag.
+
+    Starts out carrying an :class:`_UnavailableGuildStub` as ``.guild`` —
+    exactly what a raw ``fetch_channel()`` call would attach — so a caller
+    that checks permissions against ``channel.guild`` as fetched sees
+    "not public" every time, and only a caller that resolves against the
+    separately-fetched, fully-populated guild sees the true, public answer.
+    """
+
+    def __init__(self, id: str, name: str, messages: list, *, guild_id: int | None = None) -> None:
+        super().__init__(id, name, messages, public=True, guild_id=guild_id)
+        self.guild = _UnavailableGuildStub(
+            int(guild_id if guild_id is not None else _discord._GUILD_ID_DEFAULT)
+        )
+
+    def permissions_for(self, _everyone: object) -> _FakePerms:
+        # Real discord.py: Permissions(self.guild.default_role.permissions...)
+        # — a None default_role means no usable base permissions.
+        return _FakePerms(self.guild.default_role is not None)
+
+
 def _before_cursors(chan) -> list:
     return [call["before"] for call in chan.history_calls]
 

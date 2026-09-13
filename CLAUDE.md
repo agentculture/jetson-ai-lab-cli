@@ -8,28 +8,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 agent for the Jetson AI Lab community. It is meant to fetch and index Jetson AI
 Lab docs/sources and answer members' questions on Discord.
 
-**Current state:** mostly still the scaffold, with the **first slice of domain
-functionality now real**. The repo began as the unmodified **AgentCulture
-"culture-agent-template" scaffold** (see `git log`: *"scaffold jetson-ai-lab-cli
-from culture-agent-template"*) — a generic, dependency-free **agent-first CLI**
-plus mesh-agent plumbing (identity, skill kit, CI/deploy baseline). On top of
-that, the **`jetson-discord-scan` skill** now gives the agent a real, read-only
-window into the Jetson AI Lab Discord (see *Domain* below). The rest of the
-intended pipeline — indexing what it reads and answering members' questions — is
-still TODO. Build it by *adding* verbs/nouns to this CLI (or new skills/
-subsystems) on top of the scaffold; the patterns below are how you do that.
+**Current state:** mostly still the scaffold, with a **substantial slice of
+domain functionality now real** on the Discord side. The repo began as the
+unmodified **AgentCulture "culture-agent-template" scaffold** (see `git log`:
+*"scaffold jetson-ai-lab-cli from culture-agent-template"*) — a generic,
+dependency-free **agent-first CLI** plus mesh-agent plumbing (identity, skill
+kit, CI/deploy baseline). On top of that, the agent now has a real, read-only
+Discord surface that has grown well past a shallow scan: it lists and reads
+public channels and ranks them by activity (the original
+**`jetson-discord-scan`** skill's scope); aggregates participation and shared
+links into local reports (`members`, `links`); and, as of this task, a
+**paged, cache-backed read/search pipeline** — `fetch` backward-pages a public
+channel's full history into an encrypted MongoDB cache past Discord's
+100-message live-read ceiling, `search` regex-searches that cache and reports
+honestly when a window isn't fully covered rather than risking a false "no
+matches", `read --refresh` forces a live re-read to catch edits/new messages,
+`sweep` reconciles the whole cache with Discord daily (edits, deletions,
+channels gone private), and `purge` deletes a person's or channel's data (and
+every report run that mentions them) to back the published privacy policy.
+See *Domain* below for the full shape of this and its retention/encryption
+rules.
 
-Be honest about this gap: the agent can **read** the Jetson AI Lab Discord today,
-but it does not yet index sources or answer questions — don't describe those as
-if they exist. The README now documents the Discord read capability; everything
-else in "What you get" still describes the template.
+The rest of the intended pipeline — **indexing** what the agent has read into
+a queryable corpus, and **answering members' questions** on Discord — is
+still **not built**. Build it by *adding* verbs/nouns to this CLI (or new
+skills/subsystems) on top of the scaffold; the patterns below are how you do
+that.
+
+Be honest about this gap: the agent can read, cache, search, and reconcile
+the Jetson AI Lab Discord's public history today — including a full paged
+history past the live 100-message cap — but it does not index that corpus
+for retrieval or answer members' questions; don't describe those as if they
+exist. The README documents the Discord read/fetch/search capability;
+everything else in "What you get" still describes the template.
 
 ## Domain: the Jetson AI Lab Discord (read-only, public-only)
 
 The agent's job starts at the **Jetson AI Lab Research Group** Discord —
-**guild `1326246312072581160`** (~120 channels). The `jetson-discord-scan` skill
-(`.claude/skills/jetson-discord-scan/`) is the entry point and the first real
-domain code in the repo. Two constraints are **load-bearing — never relax them
+**guild `1326246312072581160`** (~120 channels). The `jetson-discord-scan`
+skill (`.claude/skills/jetson-discord-scan/`) was the entry point and the
+first real domain code in the repo; the `discord` noun group under `jlab`
+has since grown well past it — `channels`/`read`/`active` (the original
+shallow scan), `members`/`links` (participation and shared-link reports),
+and `fetch`/`search`/`read --refresh`/`sweep`/`purge`/`coverage` (the
+paged-read, cache-backed pipeline this task added, detailed further down).
+Two constraints are **load-bearing across all of it — never relax them
 casually**:
 
 - **Read-only.** The bot token is read-scoped and the skill exposes *no* write
@@ -176,8 +199,8 @@ not, and they are load-bearing:
   stored in the clear on purpose so the cache stays queryable; only the body
   and, per deviation d4 below, the author's name and display name are
   encrypted.
-- **Author names are stored, encrypted (deviation d4).** `author_name` and
-  `author_display_name` are stored beside the body, each its own encrypted
+- **Author names are stored, encrypted (deviation d4, issue #23).** `author_name`
+  and `author_display_name` are stored beside the body, each its own encrypted
   envelope, so a paged read or search can show who said something without a
   live Discord lookup; ids and every timestamp stay cleartext.
 - **Construction and honest limits:** AES-256-GCM from the approved
