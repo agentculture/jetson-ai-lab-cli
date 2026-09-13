@@ -524,7 +524,8 @@ def _purge_text(result: dict) -> str:
     reports = result["reports"]
     dry = result["dry_run"]
     head = "dry run (nothing deleted; re-run with --yes to delete)" if dry else "purged"
-    lines = [f"{head}: {target['kind']} {target['value']}"]
+    shown = "(id withheld)" if target.get("withheld") else target["value"]
+    lines = [f"{head}: {target['kind']} {shown}"]
     if "cutoff" in result:
         lines.append(f"cutoff: messages created before {result['cutoff']}")
     lines.append(f"cache: {cache['matched']} matched, {cache['deleted']} deleted")
@@ -570,6 +571,11 @@ def cmd_discord_purge(args: argparse.Namespace) -> int:
         result = _purge_mod.purge_channel(channel, dry_run=dry_run)
     else:
         result = _purge_mod.purge_older_than(older_than, dry_run=dry_run)
+    if result["target"]["kind"] == "author":
+        # Risk r15: stdout/stderr end up in cron and shell logs, so the id of
+        # someone asking to be deleted is never echoed back. The operator
+        # already holds it; the cache keeps only its keyed hash.
+        result = {**result, "target": {"kind": "author", "value": None, "withheld": True}}
     json_mode = bool(getattr(args, "json", False))
     if json_mode:
         emit_result(result, json_mode=True)

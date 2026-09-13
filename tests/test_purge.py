@@ -467,7 +467,7 @@ def test_cli_purge_with_yes_deletes_and_reports_json(
     rc = main(["discord", "purge", "--author", "42", "--yes", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["target"] == {"kind": "author", "value": "42"}
+    assert payload["target"] == {"kind": "author", "value": None, "withheld": True}
     assert payload["dry_run"] is False
     assert payload["cache"]["deleted"] == 1
     assert sorted(payload["reports"]["runs_removed"]) == sorted([str(hit_l), str(hit_m)])
@@ -970,3 +970,28 @@ def test_cli_purge_text_mentions_coverage_and_suppression(
     assert "suppression:" in out
     assert "keyed hash" in out
     assert "coverage:" in out
+
+
+# -- r15: an author purge never echoes the raw author id ----------------------
+
+_SECRET_AUTHOR = "314159265358979323"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [[], ["--yes"], ["--json"], ["--yes", "--json"]],
+    ids=["dry", "yes", "json", "yes-json"],
+)
+def test_cli_purge_author_never_echoes_the_author_id(
+    cli_env, capsys: pytest.CaptureFixture[str], extra: list[str]
+) -> None:
+    """Cron logs keep stdout/stderr, so the id someone asked to delete never lands there."""
+    assert main(["discord", "purge", "--author", _SECRET_AUTHOR, *extra]) == 0
+    captured = capsys.readouterr()
+    assert _SECRET_AUTHOR not in captured.out
+    assert _SECRET_AUTHOR not in captured.err
+    if "--json" in extra:
+        target = json.loads(captured.out)["target"]
+        assert target == {"kind": "author", "value": None, "withheld": True}
+    else:
+        assert "author (id withheld)" in captured.out
