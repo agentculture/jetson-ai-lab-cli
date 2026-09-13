@@ -171,6 +171,17 @@ def _collection(name: str, uri: str | None) -> Iterator[Any]:
     The client is built with ``journal=True``: every acknowledged write has
     reached the journal, so "the store call returned" is a durable-write
     guarantee :mod:`jlab.coverage` can widen coverage on.
+
+    ``tz_aware=True`` (discord-bot-cli#20's sibling live-environment defect):
+    pymongo decodes BSON datetimes as naive by default, dropping the UTC
+    tzinfo every stored ``created_at``/``updated_at``/``stored_at`` carries
+    going in. Every unit test here uses an in-memory fake collection that
+    never round-trips through BSON, so this never surfaced until run against
+    real jlab-mongodb — where every comparison against an aware "now"
+    (:mod:`jlab.read`, :mod:`jlab.coverage`) raised ``TypeError: can't
+    compare offset-naive and offset-aware datetimes``. Forcing tz_aware here,
+    the single choke point every collection handle is built from, decodes
+    them back as aware UTC instead.
     """
     pymongo = _seam()
     resolved_uri = _mongo_uri() if uri is None else uri
@@ -179,6 +190,7 @@ def _collection(name: str, uri: str | None) -> Iterator[Any]:
         resolved_uri,
         serverSelectionTimeoutMS=_SERVER_SELECTION_TIMEOUT_MS,
         journal=True,
+        tz_aware=True,
     )
     try:
         database = client.get_default_database(default=_DEFAULT_DB_NAME)

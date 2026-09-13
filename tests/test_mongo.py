@@ -375,6 +375,27 @@ def test_cache_handles_request_journaled_writes(
     assert fake.client_kwargs.get("journal") is True
 
 
+@pytest.mark.parametrize("opener", ["message_collection", "coverage_collection"])
+def test_cache_handles_decode_datetimes_as_timezone_aware(
+    monkeypatch: pytest.MonkeyPatch, opener: str
+) -> None:
+    """discord-bot-cli#20's sibling live-environment defect: pymongo decodes
+    BSON datetimes as naive by default, dropping the UTC tzinfo every stored
+    ``created_at``/``updated_at``/``stored_at`` carries going in — which
+    raised ``TypeError: can't compare offset-naive and offset-aware
+    datetimes`` the first time ``discord read --refresh`` ran against real
+    jlab-mongodb (every unit test's fake collection round-trips plain Python
+    objects, never BSON, so this never surfaced there). ``tz_aware=True`` at
+    the single client-construction choke point fixes it.
+    """
+    monkeypatch.setenv(_ENV_VAR, "mongodb://localhost:27019/jlab")
+    fake = _RecordingPyMongoModule()
+    monkeypatch.setattr(_mongo, "_seam", lambda: fake)
+    with getattr(_mongo, opener)():
+        pass
+    assert fake.client_kwargs.get("tz_aware") is True
+
+
 @pytest.mark.parametrize("port", [27017, 27018])
 def test_coverage_collection_rejects_legacy_ports(
     monkeypatch: pytest.MonkeyPatch, port: int
