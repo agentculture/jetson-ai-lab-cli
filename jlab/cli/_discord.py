@@ -322,14 +322,18 @@ def _history(
     *,
     limit: int | None,
     after: datetime | None,
-    before: datetime | None = None,
+    before: Any | None = None,
 ) -> Any:
     """Call ``channel.history``, passing only the cursors that are set.
 
     discord.py paginates ``history(limit=None, after=<datetime>)`` for us, so
     that is the whole of the forward "past the 100-message cap" story. A
     ``before`` cursor is passed through the same way; the page walk that uses
-    it lives in :func:`_drain_backward`.
+    it lives in :func:`_drain_backward`, which — deliberately — never sets
+    ``after`` and ``before`` in the same call (see its docstring, qodo
+    #3998468666). ``before`` may be a ``datetime`` (an initial window
+    boundary) or a message-like object with an ``id`` (a mid-walk cursor);
+    either is valid for discord.py's ``before=``.
     """
     kwargs: dict[str, Any] = {"limit": limit}
     if after is not None:
@@ -356,30 +360,106 @@ def _retry_after(exc: Exception) -> float | None:
     return min(delay, _RATE_LIMIT_MAX_DELAY)
 
 
+def _extreme_id_message(messages: list, *, want_min: bool) -> Any | None:
+    """The message with the smallest/largest ``id`` (a snowflake) in *messages*.
+
+    ``None`` if nothing in *messages* carries an ``id``. Comparing by id
+    rather than ``created_at`` matters at a page boundary: a ``datetime``
+    cursor is exclusive of its *whole* millisecond (qodo #3998468655), so two
+    messages sharing one would have the tied one silently skipped or
+    re-read. An id (a snowflake) is unique and strictly ordered by creation,
+    so it has no such tie.
+    """
+    candidates = [m for m in messages if getattr(m, "id", None) is not None]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda m: m.id) if want_min else max(candidates, key=lambda m: m.id)
+
+
+def _min_id_message(messages: list) -> Any | None:
+    """The message with the smallest ``id`` in *messages*, or ``None``."""
+    return _extreme_id_message(messages, want_min=True)
+
+
+def _max_id_message(messages: list) -> Any | None:
+    """The message with the largest ``id`` in *messages*, or ``None``."""
+    return _extreme_id_message(messages, want_min=False)
+
+
 def _resume_cursor(
     collected: list,
-    fallback: datetime | None,
+    fallback: Any,
     *,
     backward: bool = False,
-) -> datetime | None:
+) -> Any:
     """Where to resume paging after a retry, given the direction of travel.
 
     Forward (``after=``) paging resumes from the NEWEST message read so far;
-    backward (``before=``) paging must resume from the OLDEST. Using the wrong
-    edge does not error — it silently skips the unread remainder of the window
+    backward (``before=``) paging must resume from the OLDEST. Both resume by
+    the message itself (its id, a snowflake) rather than its ``created_at``
+    datetime — see :func:`_extreme_id_message` for why a datetime cursor is
+    the wrong tool here (qodo #3998468655). Using the wrong edge does not
+    error either way — it silently skips the unread remainder of the window
     (backward) or re-reads it (forward), so the direction is load-bearing.
     *fallback* is the caller's own cursor, used when nothing was read yet.
     """
-    stamps = [m.created_at for m in collected if getattr(m, "created_at", None)]
-    if not stamps:
-        return fallback
-    return min(stamps) if backward else max(stamps)
+    message = _min_id_message(collected) if backward else _max_id_message(collected)
+    return message if message is not None else fallback
 
 
-def _page_oldest(page: list) -> datetime | None:
-    """Oldest ``created_at`` in *page*, or ``None`` if none of them carry one."""
-    stamps = [m.created_at for m in page if getattr(m, "created_at", None)]
-    return min(stamps) if stamps else None
+async def _drain_backward_page(
+    channel: Any,
+    *,
+    after: datetime | None,
+    cursor: Any,
+    page_size: int,
+    max_messages: int | None,
+    collected: list,
+) -> tuple[list, bool, bool]:
+    """Read one backward page into *collected*.
+
+    Returns ``(page, capped, floor_hit)``. ``after`` is never handed to
+    ``_history`` here — it is enforced client-side instead, message by
+    message, and the page stops the moment one is reached (see
+    :func:`_drain_backward`'s docstring for why). Since nothing is ever
+    filtered server-side by ``after``, this page is exactly the newest
+    ``page_size`` messages strictly older than *cursor* (or the newest
+    overall, when *cursor* is ``None``) — discord.py's default order for a
+    ``before=``-only call — so a message reached once ``after`` is crossed is
+    guaranteed to be the oldest remaining in the page: it is safe to stop
+    without reading the rest.
+    """
+    page: list = []
+    floor_hit = False
+    async for message in _history(channel, limit=page_size, after=None, before=cursor):
+        created = getattr(message, "created_at", None)
+        if after is not None and created is not None and created <= after:
+            floor_hit = True
+            break
+        page.append(message)
+        collected.append(message)
+        if max_messages is not None and len(collected) > max_messages:
+            # Overshoot by one, then drop it — see _drain.
+            collected.pop()
+            return page, True, floor_hit
+    return page, False, floor_hit
+
+
+def _next_backward_cursor(page: list, previous_id: Any) -> Any:
+    """The next ``before`` cursor: the message with the smallest id in *page*.
+
+    Raises when the page carries no advance over *previous_id* — a page that
+    came back full but did not move the cursor backwards would loop forever
+    otherwise; the caller turns that into a *partial* result carrying what
+    was already read.
+    """
+    oldest = _min_id_message(page)
+    if oldest is None or (previous_id is not None and oldest.id >= previous_id):
+        raise RuntimeError(
+            "backward cursor did not advance past "
+            f"{previous_id!r}; stopping rather than re-reading the same page"
+        )
+    return oldest
 
 
 async def _drain_backward(
@@ -394,36 +474,45 @@ async def _drain_backward(
     """Walk ``history`` backwards page by page; ``True`` if the cap stopped it.
 
     Each page is requested with ``before=<oldest message of the previous
-    page>``, so the cursor strictly decreases. Two things end the walk: a
-    short page (fewer messages than asked for — the window is exhausted) or
-    the *limit* total being reached. A page that comes back full but does not
-    move the cursor backwards would loop forever, so it raises instead; the
-    caller turns that into a *partial* result carrying what was read.
+    page>``, so the cursor strictly decreases. ``after`` is deliberately
+    **never** passed to the same ``history()`` call as ``before`` (qodo
+    #3998468666): discord.py's ``Messageable.history`` defaults
+    ``oldest_first`` to ``after is not None``, and that default picks which
+    pagination *strategy* runs — an ``after``-anchored walk vs a
+    ``before``-anchored one — not merely the order messages come back in. If
+    both cursors were sent together, discord.py would silently run the
+    ``after``-anchored strategy and keep re-fetching the slice nearest
+    ``after`` while ``before`` never gets a turn, so the walk would report a
+    short page (and "complete") after caching only the oldest slice of the
+    window. The ``after`` floor is instead enforced client-side, page by
+    page, in :func:`_drain_backward_page`.
+
+    Three things end the walk: the ``after`` floor being crossed, a short
+    page (fewer messages than asked for — the window is exhausted), or the
+    *limit* total being reached.
     """
-    cursor = before
+    cursor: Any = before
+    previous_id: Any = None
     while True:
         if limit is not None and len(collected) >= limit:
             return False
         page_size = _BACKWARD_PAGE_SIZE
         if limit is not None:
             page_size = min(page_size, limit - len(collected))
-        page: list = []
-        async for message in _history(channel, limit=page_size, after=after, before=cursor):
-            page.append(message)
-            collected.append(message)
-            if max_messages is not None and len(collected) > max_messages:
-                # Overshoot by one, then drop it — see _drain.
-                collected.pop()
-                return True
-        if len(page) < page_size:
-            return False  # short page: the window is fully read
-        oldest = _page_oldest(page)
-        if oldest is None or (cursor is not None and oldest >= cursor):
-            raise RuntimeError(
-                "backward cursor did not advance past "
-                f"{cursor!r}; stopping rather than re-reading the same page"
-            )
-        cursor = oldest
+        page, capped, floor_hit = await _drain_backward_page(
+            channel,
+            after=after,
+            cursor=cursor,
+            page_size=page_size,
+            max_messages=max_messages,
+            collected=collected,
+        )
+        if capped:
+            return True
+        if floor_hit or len(page) < page_size:
+            return False  # the after floor was crossed, or the window is exhausted
+        cursor = _next_backward_cursor(page, previous_id)
+        previous_id = cursor.id
 
 
 async def _drain(
@@ -463,6 +552,29 @@ async def _drain(
     return False
 
 
+def _retry_is_resumable(*, backward: bool, after: datetime | None, collected: list) -> bool:
+    """Whether a failed read can retry mid-stream rather than start over.
+
+    A backward walk always can (its cursor is the oldest message read so
+    far). An unwindowed forward one cannot — it would re-read from the top
+    and duplicate what is already collected.
+    """
+    return backward or after is not None or not collected
+
+
+def _retry_cursors(
+    *,
+    backward: bool,
+    collected: list,
+    after: datetime | None,
+    before: datetime | None,
+) -> tuple[datetime | None, Any]:
+    """The ``(after, before)`` cursor pair to resume paging with after a retry."""
+    if backward:
+        return after, _resume_cursor(collected, before, backward=True)
+    return _resume_cursor(collected, after), before
+
+
 async def _collect_history(
     channel: Any,
     *,
@@ -495,20 +607,16 @@ async def _collect_history(
             )
         except Exception as exc:  # noqa: BLE001
             delay = _retry_after(exc)
-            # Only a resumable read can retry mid-stream. A backward walk always
-            # is (its cursor is the oldest message read); an unwindowed forward
-            # one is not — it would re-read from the top and duplicate.
-            resumable = backward or after is not None or not collected
-            if delay is not None and resumable and attempt < _RATE_LIMIT_RETRIES:
-                await _sleep(delay)
-                if backward:
-                    before_cursor = _resume_cursor(collected, before, backward=True)
-                else:
-                    after_cursor = _resume_cursor(collected, after)
-                continue
-            if collected:
-                return collected, False, f"read failed after {len(collected)} messages: {exc}"
-            raise
+            resumable = _retry_is_resumable(backward=backward, after=after, collected=collected)
+            if delay is None or not resumable or attempt >= _RATE_LIMIT_RETRIES:
+                if collected:
+                    return collected, False, f"read failed after {len(collected)} messages: {exc}"
+                raise
+            await _sleep(delay)
+            after_cursor, before_cursor = _retry_cursors(
+                backward=backward, collected=collected, after=after, before=before
+            )
+            continue
         if capped:
             return (
                 collected,

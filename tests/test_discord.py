@@ -1440,9 +1440,18 @@ class _WindowChannel:
 
 
 def _window_msgs(n: int, *, author: str = "ann", bot: bool = False) -> list:
+    """*n* oldest-first fake messages with zero-padded, sortable string ids.
+
+    Real discord.py ids are integer snowflakes that sort the same way
+    lexicographically or numerically; zero-padding here keeps that property
+    for a fake id like ``"ann7"`` vs ``"ann70"``, which would otherwise sort
+    as a string in the wrong order the moment a window passes 10 messages —
+    exactly the id-ordered cursor logic this module's backward-paging tests
+    exercise (:func:`jlab.cli._discord._min_id_message`).
+    """
     now = datetime.now(timezone.utc)
     return [
-        _FakeMsg(f"{author}{i}", author, f"m{i}", now - timedelta(minutes=n - i), bot=bot)
+        _FakeMsg(f"{author}{i:06d}", author, f"m{i}", now - timedelta(minutes=n - i), bot=bot)
         for i in range(n)
     ]
 
@@ -2145,8 +2154,23 @@ class _BackwardChannel:
     def permissions_for(self, _role: object) -> _FakePerms:
         return _FakePerms(self._public)
 
+    @staticmethod
+    def _cursor_created_at(cursor):
+        """Normalize a ``before``/``after`` cursor to a ``created_at``.
+
+        A cursor here is either the caller's original ``datetime`` window
+        boundary, or (once the backward walk has advanced) the message object
+        jlab now uses instead. This fixture assigns ids in the same
+        increasing order as timestamps with no ties, so filtering by the
+        cursor message's own timestamp is equivalent to filtering by id.
+        """
+        if cursor is None:
+            return None
+        return getattr(cursor, "created_at", cursor)
+
     def _page(self, limit, after, before) -> list:
-        selected = [m for m in self._messages if before is None or m.created_at < before]
+        before_ts = self._cursor_created_at(before)
+        selected = [m for m in self._messages if before_ts is None or m.created_at < before_ts]
         if after is not None:
             selected = [m for m in selected if m.created_at > after]
         newest_first = list(reversed(selected))
@@ -2245,10 +2269,11 @@ def test_backward_drain_pages_past_one_page_and_advances_its_cursor() -> None:
     assert len(chan.history_calls) == 3
     cursors = _before_cursors(chan)
     assert cursors[0] is None  # first page starts at the newest message
-    # STRICTLY decreasing: this is the assertion that rules out a re-fetch loop.
-    assert cursors[1] > cursors[2]
-    assert cursors[1] == msgs[150].created_at  # oldest of page 1 (msgs 249..150)
-    assert cursors[2] == msgs[50].created_at  # oldest of page 2 (msgs 149..50)
+    # STRICTLY decreasing (by id, a snowflake, not created_at — qodo
+    # #3998468655): the assertion that rules out a re-fetch loop.
+    assert cursors[1].id > cursors[2].id
+    assert cursors[1] is msgs[150]  # oldest of page 1 (msgs 249..150)
+    assert cursors[2] is msgs[50]  # oldest of page 2 (msgs 149..50)
 
 
 def test_backward_drain_reads_a_channel_shallower_than_one_page_in_one_call() -> None:
@@ -2258,7 +2283,8 @@ def test_backward_drain_reads_a_channel_shallower_than_one_page_in_one_call() ->
             chan, limit=None, after=None, before=None, backward=True, max_messages=None
         )
     )
-    assert complete is True and reason is None
+    assert complete is True
+    assert reason is None
     assert len(messages) == 7
     assert len(chan.history_calls) == 1
 
@@ -2344,11 +2370,16 @@ def test_backward_drain_cap_equal_to_the_window_reports_complete() -> None:
 
 
 def test_resume_cursor_resumes_from_newest_forward_and_oldest_backward() -> None:
-    """The direction decides the edge: newest for after=, oldest for before=."""
+    """The direction decides the edge: newest for after=, oldest for before=.
+
+    The resume cursor is the message itself (by id, a snowflake), not its
+    ``created_at`` — qodo #3998468655: a datetime cursor is exclusive of its
+    whole millisecond, so a sibling message sharing it would be skipped.
+    """
     msgs = _window_msgs(5)
-    oldest, newest = msgs[0].created_at, msgs[-1].created_at
-    assert _discord._resume_cursor(msgs, None) == newest
-    assert _discord._resume_cursor(msgs, None, backward=True) == oldest
+    oldest, newest = msgs[0], msgs[-1]
+    assert _discord._resume_cursor(msgs, None) is newest
+    assert _discord._resume_cursor(msgs, None, backward=True) is oldest
     # Nothing read yet: fall back to the caller's own cursor, in both directions.
     fallback = datetime.now(timezone.utc)
     assert _discord._resume_cursor([], fallback) == fallback
@@ -2396,7 +2427,8 @@ def test_backward_drain_resumes_from_the_oldest_message_after_a_429(
     )
 
     assert slept == [0.25]
-    assert complete is True and reason is None
+    assert complete is True
+    assert reason is None
     ids = [m.id for m in messages]
     # Nothing lost and nothing duplicated across the retry boundary.
     assert sorted(ids) == sorted(m.id for m in msgs)
@@ -2405,8 +2437,11 @@ def test_backward_drain_resumes_from_the_oldest_message_after_a_429(
     # call 0: page 1 (None). call 1: 429 at the oldest of page 1. call 2: the
     # RESUMED page, from that same oldest — not None, which would re-read
     # page 1, and not the newest, which would walk the wrong way entirely.
+    # The cursor is the message itself (by id), not its timestamp — see
+    # qodo #3998468655 — so both are the SAME message object as msgs[150].
     assert cursors[0] is None
-    assert cursors[1] == cursors[2] == msgs[150].created_at
+    assert cursors[1] is msgs[150]
+    assert cursors[2] is msgs[150]
     assert all(c is not None for c in cursors[1:])
 
 
@@ -2429,12 +2464,11 @@ def test_backward_drain_reports_failed_when_the_rate_limit_never_clears(
             return _boom()
 
     chan = _AlwaysLimited("c1", "deep", [])
+    coro = _discord._collect_history(
+        chan, limit=None, after=None, before=None, backward=True, max_messages=None
+    )
     with pytest.raises(_RateLimited):
-        asyncio.run(
-            _discord._collect_history(
-                chan, limit=None, after=None, before=None, backward=True, max_messages=None
-            )
-        )
+        asyncio.run(coro)
     assert len(chan.history_calls) == 4  # initial try + 3 retries
 
 
@@ -2507,7 +2541,9 @@ def test_forward_drain_still_issues_one_unwindowed_call_with_no_before() -> None
         _discord._collect_history(chan, limit=None, after=cutoff, max_messages=None)
     )
 
-    assert len(messages) == 250 and complete is True and reason is None
+    assert len(messages) == 250
+    assert complete is True
+    assert reason is None
     # _WindowChannel.history has no `before` parameter at all: passing one
     # would TypeError. The forward call signature is byte-for-byte what it was.
     assert chan.history_calls == [{"limit": None, "after": cutoff}]
