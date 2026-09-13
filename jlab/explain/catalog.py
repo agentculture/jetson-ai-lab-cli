@@ -139,10 +139,12 @@ private opt-in).
   — inspect cache coverage metadata.
 - `jetson-ai-lab-cli discord fetch <channel_id> [--until DATE] [--max-messages N]` —
   backward-page a public channel's missing history into the cache.
-- `jetson-ai-lab-cli discord sweep` — daily reconciliation of the cache with Discord.
 - `jetson-ai-lab-cli discord search <channel_id> --grep PATTERN [--since --until]
   [--max-matches N] [--timeout SECS]` — regex search over the cached corpus
   (cache-served only, never contacts Discord).
+- `jetson-ai-lab-cli discord purge (--author ID | --channel ID | --older-than DAYS)
+  [--yes]` — delete from the cache and derived reports.
+- `jetson-ai-lab-cli discord sweep` — daily reconciliation of the cache with Discord.
 - `jetson-ai-lab-cli discord doctor` — verify token + guild readable.
 - `jetson-ai-lab-cli discord overview` — describe this noun group.
 
